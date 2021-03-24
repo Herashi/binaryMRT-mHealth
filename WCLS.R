@@ -1,5 +1,3 @@
-
-
 weighted_centered_least_square <- function(
   dta,
   id_varname,
@@ -69,7 +67,10 @@ weighted_centered_least_square <- function(
   sample_size <- length(unique(dta[, id_varname]))
   total_person_decisionpoint <- nrow(dta)
   
-  if (is.null(avail_varname)) {
+  
+  # availability, setting everyone to be available
+  
+  if (is.null(avail_varname)) {   
     avail <- rep(1, total_person_decisionpoint)
   } else {
     avail <- dta[, avail_varname]
@@ -87,6 +88,9 @@ weighted_centered_least_square <- function(
   Y <- dta[, outcome_varname]
   Xdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, moderator_varname] ) ) # X (moderator) design matrix, intercept added
   Zdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, control_varname] ) ) # Z (control) design matrix, intercept added
+
+  
+  ###  rand_prob_tilde_varname is the numerator of the weight, set to be 0.2
   
   if (is.null(rand_prob_tilde_varname) & is.null(rand_prob_tilde)) {
     p_t_tilde <- rep(0.5, nrow(dta))
@@ -138,6 +142,8 @@ weighted_centered_least_square <- function(
   if (is.null(estimator_initial_value)) {
     estimator_initial_value <- rep(0, length = p + q)
   }
+  
+  # calculating the root of the estimating function:
   
   solution <- tryCatch(
     {
@@ -213,6 +219,10 @@ weighted_centered_least_square <- function(
   
   person_first_index <- c(find_change_location(dta[, id_varname]), total_person_decisionpoint + 1)
   
+  ################################
+  # edit this part to new meat
+  ################################
+  
   for (i in 1:sample_size) {
     D_term_i <- D_term_collected[, person_first_index[i] : (person_first_index[i+1] - 1)]
     r_term_i <- matrix(r_term_collected[person_first_index[i] : (person_first_index[i+1] - 1)], ncol = 1)
@@ -220,6 +230,10 @@ weighted_centered_least_square <- function(
     Sigman_summand[i, , ] <- D_term_i %*% r_term_i %*% t(r_term_i) %*% t(D_term_i)
   }
   Sigman <- apply(Sigman_summand, c(2,3), sum) / sample_size
+  
+  ######################################
+  
+  
   
   varcov <- Mn_inv %*% Sigman %*% t(Mn_inv) / sample_size
   alpha_se <- sqrt(diag(varcov)[1:q])

@@ -81,7 +81,7 @@ for (i_ss in 1:length(sample_sizes)) {
     if (isim %% 10 == 0) {
       cat(paste("Starting iteration",isim,"\n"))
     }
-    dta <- data_generating_process(sample_size, total_T)
+    dta <- data_generating_process(sample_size, total_T,group_ls)
     fit_wcls <- weighted_centered_least_square(
       dta = dta,
       id_varname = "userid",
