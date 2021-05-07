@@ -1,4 +1,4 @@
-setwd("~/binary_mrt/Scenario 2")
+setwd("~/binary_mrt/Scenario 4")
 
 source("estimators.R")
 source("estimators_robust_adhocery.R") #didn't use the function in this file
@@ -49,7 +49,7 @@ registerDoMC(min(detectCores() - 1, max_cores))
 
 sample_sizes <- c(250, 625, 1000)
 total_T <- 30
-nsim <- 500
+nsim <- 1000
 
 control_vars <- "S"
 moderator_vars <- c()
@@ -71,9 +71,9 @@ for (i_ss in 1:length(sample_sizes)) {
     fit_wcls <- weighted_centered_least_square(
       dta = dta,
       group_ls=group_ls,
-      id_varname = "userid",
+      id_varname = "pairid",
       decision_time_varname = "day",
-      treatment_varname = "A",
+      treatment_varname = "IE",
       outcome_varname = "Y",
       control_varname = control_vars,
       moderator_varname = moderator_vars,
@@ -89,8 +89,7 @@ for (i_ss in 1:length(sample_sizes)) {
   beta_names <- c("Intercept", moderator_vars)
   num_estimator <- length(ee_names)
   
-  
-  # save(result,file="result_1000.RData")
+
   #########################
   
   alpha <- matrix(sapply(result, function(l) l$alpha_hat), byrow = TRUE,nrow =nsim )

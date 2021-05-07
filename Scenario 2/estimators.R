@@ -807,6 +807,7 @@ efficient_ee_modified_weight <- function(
 
 weighted_centered_least_square <- function(
   dta,
+  group_ls,
   id_varname,
   decision_time_varname,
   treatment_varname,
@@ -874,7 +875,10 @@ weighted_centered_least_square <- function(
   sample_size <- length(unique(dta[, id_varname]))
   total_person_decisionpoint <- nrow(dta)
   
-  if (is.null(avail_varname)) {
+  
+  # availability, setting everyone to be available
+  
+  if (is.null(avail_varname)) {   
     avail <- rep(1, total_person_decisionpoint)
   } else {
     avail <- dta[, avail_varname]
@@ -892,6 +896,9 @@ weighted_centered_least_square <- function(
   Y <- dta[, outcome_varname]
   Xdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, moderator_varname] ) ) # X (moderator) design matrix, intercept added
   Zdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, control_varname] ) ) # Z (control) design matrix, intercept added
+  
+  
+  ###  rand_prob_tilde_varname is the numerator of the weight, set to be 0.2
   
   if (is.null(rand_prob_tilde_varname) & is.null(rand_prob_tilde)) {
     p_t_tilde <- rep(0.5, nrow(dta))
@@ -944,6 +951,8 @@ weighted_centered_least_square <- function(
     estimator_initial_value <- rep(0, length = p + q)
   }
   
+  # calculating the root of the estimating function:
+  
   solution <- tryCatch(
     {
       multiroot(estimating_equation, estimator_initial_value)
@@ -960,6 +969,9 @@ weighted_centered_least_square <- function(
   beta_hat <- as.vector(estimator$beta)
   
   ### 3. asymptotic variance ###
+  
+  group = group_str(group_ls)
+  person_first_index <- c(find_change_location(dta[, id_varname]), total_person_decisionpoint + 1)
   
   ### 3.1 Compute M_n matrix (M_n is the empirical expectation of the derivative of the estimating function) ###
   
@@ -1007,45 +1019,106 @@ weighted_centered_least_square <- function(
     
     Mn_summand[it, , ] <- partialD_partialtheta * r_term + D_term %o% partialr_partialtheta
   }
-  Mn <- apply(Mn_summand, c(2,3), sum) / sample_size
+  
+  
+  Mn <- apply(Mn_summand, c(2,3), sum) 
   Mn_inv <- solve(Mn)
+  
+  # Mn_n <- array(NA, dim = c(sample_size, p+q, p+q))
+  # for (i in 1:sample_size) {
+  #   Mn_n[i, , ] <- apply(Mn_summand[person_first_index[i] : (person_first_index[i+1] - 1),,], c(2,3), sum)
+  # }
+  
+  # bread = array(NA, dim = c(group[["#groups"]], p+q, p+q))
+  
+  # for (g in unique(group[["group_id"]])){
+  #   row_ind = which(group[["group_id"]]==g)
+  #   bread_g = apply(Mn_n[row_ind,,], c(2,3), sum)
+  #   bread[g,,] = solve(bread_g)
+  # }
+  
+  
   
   ### 3.2 Compute \Sigma_n matrix (\Sigma_n is the empirical variance of the estimating function) ###
   
-  Sigman_summand <- array(NA, dim = c(sample_size, p+q, p+q))
+  Sigman_summand <- array(NA, dim = c(p+q,sample_size))
   # Sigman_summand is  \sum_{t=1}^T ( D^{(t),T} r^(t) )^{\otimes 2}
   # See note 2018.08.06 about small sample correction
   
-  person_first_index <- c(find_change_location(dta[, id_varname]), total_person_decisionpoint + 1)
+  
   
   for (i in 1:sample_size) {
     D_term_i <- D_term_collected[, person_first_index[i] : (person_first_index[i+1] - 1)]
     r_term_i <- matrix(r_term_collected[person_first_index[i] : (person_first_index[i+1] - 1)], ncol = 1)
     
-    Sigman_summand[i, , ] <- D_term_i %*% r_term_i %*% t(r_term_i) %*% t(D_term_i)
+    Sigman_summand[,i ] <- D_term_i %*% r_term_i 
   }
-  Sigman <- apply(Sigman_summand, c(2,3), sum) / sample_size
   
-  varcov <- Mn_inv %*% Sigman %*% t(Mn_inv) / sample_size
+  meat = 0
+  
+  for (g in unique(group[["group_id"]])){
+    row_ind = which(group[["group_id"]]==g)
+    g_size = group[["group size"]][g]
+    meat_g = 0
+    
+    for (i in row_ind) {
+      a = Sigman_summand[,i]
+      for(j in row_ind){
+        b = Sigman_summand[,j]
+        meat_g =meat_g + a %*% t(b)
+      }
+    }
+    meat = meat+meat_g
+  }
+  
+  Sigman <- meat
+  ######################################
+  
+  varcov <- Mn_inv %*% Sigman %*% t(Mn_inv)
   alpha_se <- sqrt(diag(varcov)[1:q])
   beta_se <- sqrt(diag(varcov)[(q+1):(q+p)])
   
   
   ### 4. small sample correction ###
+  # MD-corrected (Mancl and DeRouen) sandwich estimator
   
-  Sigman_tilde <- 0
+  Sigman_tilde <- array(NA, dim = c(p+q,sample_size))
+  n_group = group[["#groups"]]
+  bread_g = Mn_inv* n_group  # use this to approximate the group bread
+  
   for (i in 1:sample_size) {
     D_term_i <- D_term_collected[, person_first_index[i] : (person_first_index[i+1] - 1)]
     r_term_i <- matrix(r_term_collected[person_first_index[i] : (person_first_index[i+1] - 1)], ncol = 1)
     partialr_partialtheta_i <- partialr_partialtheta_collected[person_first_index[i] : (person_first_index[i+1] - 1), ]
-    H_ii <- partialr_partialtheta_i %*% Mn_inv %*% D_term_i / sample_size
+    # H_ii <- partialr_partialtheta_i %*% Mn_inv %*% D_term_i 
+    H_ii <- partialr_partialtheta_i %*% bread_g %*% D_term_i 
     Ii_minus_Hii_inv <- solve(diag(nrow(H_ii)) - H_ii)
     
-    Sigman_tilde <- Sigman_tilde + D_term_i %*% Ii_minus_Hii_inv %*% r_term_i %*% t(r_term_i) %*% t(Ii_minus_Hii_inv) %*% t(D_term_i)
+    Sigman_tilde[,i] <-  D_term_i %*% Ii_minus_Hii_inv %*% r_term_i 
+    
   }
-  Sigman_tilde <- Sigman_tilde / sample_size
   
-  varcov_adjusted <- Mn_inv %*% Sigman_tilde %*% t(Mn_inv) / sample_size
+  meat_tilde = 0
+  
+  for (g in unique(group[["group_id"]])){
+    row_ind = which(group[["group_id"]]==g)
+    g_size = group[["group size"]][g]
+    meat_g = 0
+    
+    for (i in row_ind) {
+      a = Sigman_tilde[,i]
+      for(j in row_ind){
+        b = Sigman_tilde[,j]
+        meat_g =meat_g + a %*% t(b)
+      }
+    }
+    
+    meat_tilde = meat_tilde + meat_g
+  }
+  
+  Sigman_tilde <- meat_tilde
+  
+  varcov_adjusted <- Mn_inv %*% Sigman_tilde %*% t(Mn_inv)
   alpha_se_adjusted <- sqrt(diag(varcov_adjusted)[1:q])
   beta_se_adjusted <- sqrt(diag(varcov_adjusted)[(q+1):(q+p)])
   
@@ -1063,8 +1136,6 @@ weighted_centered_least_square <- function(
               dims = list(p = p, q = q),
               f.root = solution$f.root))
 }
-
-
 
 
 weighted_centered_least_square2 <- function(

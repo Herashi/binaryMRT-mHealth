@@ -47,6 +47,9 @@ dgm_binary_categorical_covariate <- function(sample_size, total_T,group_ls) {
   dta$baseline_group_err = rep(group[["group err"]], each = total_T)
   dta$treatment_group_err = rep(group[["group b_g"]], each = total_T)
   
+  groupid <- group[["group_id"]]
+  groupsize <- group[["group size"]]
+  
   for (t in 1:total_T) {
     # row index for the rows corresponding to day t for every subject
     row_index <- seq(from = t, by = total_T, length = sample_size)
@@ -59,6 +62,13 @@ dgm_binary_categorical_covariate <- function(sample_size, total_T,group_ls) {
       sample(c(0,1,2), sample_size, replace = TRUE)
     }
     
+    S_bar = aggregate(x = dta$S[row_index],                # Specify data column
+                      by = list(groupid),              # Specify group indicator
+                      FUN = mean)[,2]
+    
+    S_bar_t = rep(S_bar,groupsize)
+    
+    
     dta$S2[row_index] <- ifelse(dta$S[row_index] == 2, 1, 0) 
     dta$prob_A[row_index] <- rep(prob_a, sample_size)
     dta$A[row_index] <- rbinom(sample_size, 1, dta$prob_A[row_index])
@@ -70,7 +80,7 @@ dgm_binary_categorical_covariate <- function(sample_size, total_T,group_ls) {
     # +dta$treatment_group_err[row_index]
     #+ dta$baseline_group_err[row_index]
     dta$prob_Y[row_index] <- dta$prob_Y_A0[row_index] * exp(dta$A[row_index] * 
-                                                              (beta_0 + beta_1 * dta$S[row_index]+dta$treatment_group_err[row_index])+ 
+                                                              (beta_0 + beta_1*S_bar_t+dta$treatment_group_err[row_index])+ 
                                                               dta$baseline_group_err[row_index])
     dta$prob_Y[row_index] = pmin(1,dta$prob_Y[row_index])
     # sample
@@ -84,8 +94,8 @@ dgm_binary_categorical_covariate <- function(sample_size, total_T,group_ls) {
 beta_true <- c(0.1, 0.3)
 
 ## true beta for Intercept
-## log((0.1*exp(0.1)+0.25*exp(0.4)+0.2*exp(0.7))/(0.1+0.25+0.2))
-beta_true_marginal <- 0.477
+## log((0.2*exp(0.1)+0.5*exp(0.4)+0.4*exp(0.7))/(0.2+0.5+0.4))
+beta_true_marginal <- 0.4
 
 ## true alpha for (Intercept, S, S2)
 alpha_true <- c(-1.6094379,  0.9162907, -1.1394343)

@@ -1,4 +1,4 @@
-setwd("~/binary_mrt/Scenario 2")
+setwd("~/binary_mrt/Scenario 3")
 
 source("estimators.R")
 source("estimators_robust_adhocery.R") #didn't use the function in this file
@@ -49,7 +49,7 @@ registerDoMC(min(detectCores() - 1, max_cores))
 
 sample_sizes <- c(250, 625, 1000)
 total_T <- 30
-nsim <- 500
+nsim <- 1000
 
 control_vars <- "S"
 moderator_vars <- c()
@@ -107,7 +107,7 @@ for (i_ss in 1:length(sample_sizes)) {
   
   #################################
   
-  result <- compute_result_beta(beta_true_marginal, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level = 0.05)
+  result <- compute_result_beta(beta_true=0.4, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level = 0.05)
   result_df <- data.frame(ss = rep(sample_size, num_estimator),
                           est = ee_names,
                           bias = result$bias,

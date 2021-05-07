@@ -1,0 +1,27 @@
+---
+title: "Untitled"
+author: "Jieru Shi"
+date: "2021/3/24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+$$
+E[e^X] = e^{\mu+\sigma^2/2}\frac{\Phi[(b-\mu)/\sigma-\sigma]}{\Phi[(b-\mu)/\sigma]}
+$$
+$$
+x = X-\sigma^2/2-\log(\frac{\Phi(b/\sigma-\sigma)}{\Phi(b/\sigma)})
+$$
+
+
+Now we need to solve $(b,\sigma)$:
+
+$$
+b-\sigma^2/2-\log(\frac{\Phi(b/\sigma-\sigma)}{\Phi(b/\sigma)})<\log(1/p_{max})
+$$

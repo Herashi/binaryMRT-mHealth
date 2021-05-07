@@ -40,7 +40,7 @@ group_str = function(group){
   
   # correction for adding terms on exp{}
   a = -Inf
-  b = log(1/max_prob)
+  b = log(1/max_prob)-0.1
   
   # baseline error term (cluster-level intercept term that does not interact with treatment.)
   err = c()

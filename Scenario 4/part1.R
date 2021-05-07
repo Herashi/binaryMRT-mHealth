@@ -1,4 +1,4 @@
-setwd("~/binary_mrt/Scenario 2")
+setwd("~/binary_mrt/Scenario 4")
 
 source("estimators.R")
 source("estimators_robust_adhocery.R") #didn't use the function in this file
@@ -8,9 +8,9 @@ data_generating_process <- dgm_binary_categorical_covariate
 
 library(tidyverse)
 
-library(foreach)
-library(doMC)
-library(doRNG)
+# library(foreach)
+# library(doMC)
+# library(doRNG)
 
 compute_result_beta <- function(beta_true, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level,
                                 na.rm = FALSE) {
@@ -44,36 +44,26 @@ compute_result_beta <- function(beta_true, beta, beta_se, beta_se_adjusted, mode
 }
 
 
-max_cores <- 4
-registerDoMC(min(detectCores() - 1, max_cores))
+total_T <- as.numeric(Sys.getenv("tmax"))
 
-sample_sizes <- c(250, 625, 1000)
-total_T <- 30
-nsim <- 500
+nsim <- 1
 
 control_vars <- "S"
 moderator_vars <- c()
 
-result_df_collected <- data.frame()
 
-
-for (i_ss in 1:length(sample_sizes)) {
+sample_size <- 625
+group_ls = group_all[[as.character(sample_size)]]
   
-  sample_size <- sample_sizes[i_ss]
-  group_ls = group_all[[as.character(sample_size)]]
   
-  result <- foreach(isim = 1:nsim, .combine = "c") %dorng% {
-    if (isim %% 100 == 0) {
-      cat(paste("Starting iteration",isim,"\n"))
-    }
-    dta <- data_generating_process(sample_size, total_T,group_ls)
+dta <- data_generating_process(sample_size, total_T,group_ls)
     
-    fit_wcls <- weighted_centered_least_square(
+fit_wcls <- weighted_centered_least_square(
       dta = dta,
       group_ls=group_ls,
-      id_varname = "userid",
+      id_varname = "pairid",
       decision_time_varname = "day",
-      treatment_varname = "A",
+      treatment_varname = "IE",
       outcome_varname = "Y",
       control_varname = control_vars,
       moderator_varname = moderator_vars,
@@ -82,33 +72,32 @@ for (i_ss in 1:length(sample_sizes)) {
       rand_prob_tilde = 0.2,
       estimator_initial_value = NULL
     )
-    output <- list(fit_wcls = fit_wcls)
-  }
-  ee_names <- "wcls"
-  alpha_names <- c("Intercept", control_vars)
-  beta_names <- c("Intercept", moderator_vars)
-  num_estimator <- length(ee_names)
+result  <- list(fit_wcls = fit_wcls)
+  
+ee_names <- "wcls"
+alpha_names <- c("Intercept", control_vars)
+beta_names <- c("Intercept", moderator_vars)
+num_estimator <- length(ee_names)
   
   
-  # save(result,file="result_1000.RData")
   #########################
   
-  alpha <- matrix(sapply(result, function(l) l$alpha_hat), byrow = TRUE,nrow =nsim )
-  alpha_se <- matrix(sapply(result, function(l) l$alpha_se),byrow = TRUE,nrow =nsim)
-  alpha_se_adjusted <- matrix(sapply(result, function(l) l$alpha_se_adjusted),byrow = TRUE, nrow = nsim)
+alpha <- matrix(sapply(result, function(l) l$alpha_hat), byrow = TRUE,nrow =nsim)
+alpha_se <- matrix(sapply(result, function(l) l$alpha_se),byrow = TRUE,nrow =nsim)
+alpha_se_adjusted <- matrix(sapply(result, function(l) l$alpha_se_adjusted),byrow = TRUE, nrow = nsim)
   
-  colnames(alpha)= colnames(alpha_se)= colnames(alpha_se_adjusted) = alpha_names
+colnames(alpha)= colnames(alpha_se)= colnames(alpha_se_adjusted) = alpha_names
   
-  beta <- matrix(sapply(result, function(l) l$beta_hat))
-  beta_se <- matrix(sapply(result, function(l) l$beta_se))
-  beta_se_adjusted <- matrix(sapply(result, function(l) l$beta_se_adjusted))
+beta <- matrix(sapply(result, function(l) l$beta_hat))
+beta_se <- matrix(sapply(result, function(l) l$beta_se))
+beta_se_adjusted <- matrix(sapply(result, function(l) l$beta_se_adjusted))
   
-  colnames(beta)= colnames(beta_se) = colnames(beta_se_adjusted)= beta_names
+colnames(beta)= colnames(beta_se) = colnames(beta_se_adjusted)= beta_names
   
   #################################
   
-  result <- compute_result_beta(beta_true_marginal, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level = 0.05)
-  result_df <- data.frame(ss = rep(sample_size, num_estimator),
+result <- compute_result_beta(beta_true_marginal, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level = 0.05)
+result_df <- data.frame(ss = rep(sample_size, num_estimator),
                           est = ee_names,
                           bias = result$bias,
                           se=result$se,
@@ -117,10 +106,10 @@ for (i_ss in 1:length(sample_sizes)) {
                           rmse = result$rmse,
                           cp.unadj = result$coverage_prob,
                           cp.adj = result$coverage_prob_adjusted)
-  names(result_df) <- c("ss", "est", "bias","se.unadj","se.adj", "sd", "rmse", "cp.unadj", "cp.adj")
-  rownames(result_df) <- NULL
-  
-  result_df_collected <- rbind(result_df_collected, result_df)
-}
+names(result_df) <- c("ss", "est", "bias","se.unadj","se.adj", "sd", "rmse", "cp.unadj", "cp.adj")
+rownames(result_df) <- NULL
 
-save(result_df_collected,file = "test.RData")
+arrayid <- Sys.getenv("SLURM_ARRAY_TASK_ID")
+save(result_df, file=paste0("fity_", arrayid, "_tmax_", tmax_linux, ".RData"))
+
+# stopCluster(cl)

@@ -85,7 +85,7 @@ weighted_centered_least_square <- function(
   A[avail == 0] <- 0
   
   p_t <- dta[, rand_prob_varname]
-  cA <- A - p_t # centered A
+  # cA <- A - p_t # centered A
   Y <- dta[, outcome_varname]
   Xdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, moderator_varname] ) ) # X (moderator) design matrix, intercept added
   Zdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, control_varname] ) ) # Z (control) design matrix, intercept added
@@ -106,7 +106,9 @@ weighted_centered_least_square <- function(
   } else {
     p_t_tilde <- dta[, rand_prob_tilde_varname]
   }
-  cA_tilde <- A - p_t_tilde
+  # cA_tilde <- A - p_t_tilde
+  # A here is the indirect effect, no need to be centered
+  cA_tilde <- A
   
   WCLS_weight <- ifelse(A, p_t_tilde / p_t, (1 - p_t_tilde) / (1 - p_t))
   
@@ -217,20 +219,6 @@ weighted_centered_least_square <- function(
   Mn <- apply(Mn_summand, c(2,3), sum) 
   Mn_inv <- solve(Mn)
   
-  # Mn_n <- array(NA, dim = c(sample_size, p+q, p+q))
-  # for (i in 1:sample_size) {
-  #   Mn_n[i, , ] <- apply(Mn_summand[person_first_index[i] : (person_first_index[i+1] - 1),,], c(2,3), sum)
-  # }
-  
-  # bread = array(NA, dim = c(group[["#groups"]], p+q, p+q))
-  
-  # for (g in unique(group[["group_id"]])){
-  #   row_ind = which(group[["group_id"]]==g)
-  #   bread_g = apply(Mn_n[row_ind,,], c(2,3), sum)
-  #   bread[g,,] = solve(bread_g)
-  # }
-  
-  
   
   ### 3.2 Compute \Sigma_n matrix (\Sigma_n is the empirical variance of the estimating function) ###
   
@@ -249,14 +237,16 @@ weighted_centered_least_square <- function(
   
   meat = 0
   
+  pair_group_table = dta[,c("pairid","groupid")]%>% distinct()
+  
   for (g in unique(group[["group_id"]])){
-    row_ind = which(group[["group_id"]]==g)
-    g_size = group[["group size"]][g]
+    pair_ind = which(pair_group_table$groupid==g)
+    # g_size = group[["group size"]][g]
     meat_g = 0
     
-    for (i in row_ind) {
+    for (i in pair_ind) {
       a = Sigman_summand[,i]
-      for(j in row_ind){
+      for(j in pair_ind){
         b = Sigman_summand[,j]
         meat_g =meat_g + a %*% t(b)
       }
@@ -294,13 +284,13 @@ weighted_centered_least_square <- function(
   meat_tilde = 0
   
   for (g in unique(group[["group_id"]])){
-    row_ind = which(group[["group_id"]]==g)
-    g_size = group[["group size"]][g]
+    pair_ind = which(pair_group_table$groupid==g)
+    # g_size = group[["group size"]][g]
     meat_g = 0
     
-    for (i in row_ind) {
+    for (i in pair_ind) {
       a = Sigman_tilde[,i]
-      for(j in row_ind){
+      for(j in pair_ind){
         b = Sigman_tilde[,j]
         meat_g =meat_g + a %*% t(b)
       }
