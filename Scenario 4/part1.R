@@ -52,7 +52,7 @@ control_vars <- "S"
 moderator_vars <- c()
 
 
-sample_size <- 625
+sample_size <- 1000
 group_ls = group_all[[as.character(sample_size)]]
   
   

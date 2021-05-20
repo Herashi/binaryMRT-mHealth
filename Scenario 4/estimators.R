@@ -1071,7 +1071,7 @@ weighted_centered_least_square <- function(
   # MD-corrected (Mancl and DeRouen) sandwich estimator
   
   Sigman_tilde <- array(NA, dim = c(p+q,sample_size))
-  n_group = group[["#groups"]]
+  n_group = unique(group[["group size"]])
   bread_g = Mn_inv* n_group  # use this to approximate the group bread
   
   for (i in 1:sample_size) {

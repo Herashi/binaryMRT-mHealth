@@ -1083,7 +1083,7 @@ weighted_centered_least_square <- function(
   # MD-corrected (Mancl and DeRouen) sandwich estimator
   
   Sigman_tilde <- array(NA, dim = c(p+q,sample_size))
-  n_group = group[["#groups"]]
+  n_group = unique(group[["group size"]])
   bread_g = Mn_inv* n_group  # use this to approximate the group bread
   
   for (i in 1:sample_size) {
@@ -1140,6 +1140,7 @@ weighted_centered_least_square <- function(
 
 weighted_centered_least_square2 <- function(
   dta,
+  group_ls,
   id_varname,
   decision_time_varname,
   treatment_varname,
@@ -1153,23 +1154,78 @@ weighted_centered_least_square2 <- function(
   estimator_initial_value = NULL
 )
 {
+  ############## description ###############
+  ##
+  ## This function estimates the moderated treatment effect for binary outcome,
+  ## and provides variance estimate.
+  ##
+  ## It incorporates two methods for small sample correction:
+  ## 1) the usage of "Hat" matrix in the variance estimate (as in Mancl & DeRouen 2001)
+  ## 2) the usage of t-distribution or F-distribution critical value with corrected degrees of freedom
+  ##    (as in Liao et al. 2015)
+  
+  ############## arguments ###############
+  ##
+  ## dta...................the data set in long format
+  ## id_varname............variable name for subject id (to distinguish between subjects in dta)
+  ## decision_time_varname.....variable name for decision points in study
+  ## outcome_varname.......variable name for outcome variable
+  ## control_varname.......vector of variable names used to reduce noise (Z in the model),
+  ##                       could be NULL (no control covariates)
+  ## moderator_varname.....vector of variable names as effect modifiers (X in the model),
+  ##                       could be NULL (no effect modifier)
+  ## rand_prob_varname.....variable name for randomization probability (a column in dta)
+  ## avail_varname.........variable name for availability (a column in dta)
+  ##                       default to NULL (available at all decision points)
+  ## rand_prob_tilde_varname.....variable name for \tilde{p}_t(1|H_t) (a column in dta)
+  ##                             this is the arbitrary weight used in WCLS
+  ##                             default to NULL (in which case \tilde{p}_t(1|H_t) is set to 0.5)
+  ## rand_prob_tilde.............a numeric vector of the same length as dta
+  ##                             this is another way to specify \tilde{p}_t(1|H_t)
+  ##                             default to NULL (in which case \tilde{p}_t(1|H_t) is set to 0.5)
+  ## estimator_initial_value.....initial value for the estimator in the root finding algorithm
+  ##                             length is len(control_varname) + len(moderator_varname) + 2
+  ##                             default to NULL (in which case the intial value = all 0's)
+  
+  ############## return value ###############
+  ##
+  ## This function returns a list of the following components:
+  ##
+  ## beta_hat..............estimated beta
+  ## alpha_hat.............estimated alpha
+  ## beta_se...............standard error for beta_hat
+  ## alpha_se..............standard error for alpha_hat
+  ## beta_se_adjusted......standard error for beta_hat, with small sample correction (hat matrix)
+  ## alpha_se_adjusted.....standard error for alpha_hat, with small sample correction (hat matrix)
+  ## varcov................estimated variance-covariance matrix for (alpha_hat, beta_hat)
+  ## varcov_adjusted.......estimated variance-covariance matrix for (alpha_hat, beta_hat), with small sample correction (hat matrix)
+  ## f.root................value of the estimating function at (alpha_hat, beta_hat)
+  
+  ##########################################
+  
   ### 1. preparation ###
   
   sample_size <- length(unique(dta[, id_varname]))
   total_person_decisionpoint <- nrow(dta)
-  
-  A <- dta[, treatment_varname]
-  p_t <- dta[, rand_prob_varname]
-  cA <- A - p_t # centered A
-  Y <- dta[, outcome_varname]
-  Xdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, moderator_varname] ) ) # X (moderator) design matrix, intercept added
-  Zdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, control_varname] ) ) # Z (control) design matrix, intercept added
   
   if (is.null(avail_varname)) {
     avail <- rep(1, total_person_decisionpoint)
   } else {
     avail <- dta[, avail_varname]
   }
+  
+  A <- dta[, treatment_varname]
+  # checking for NA in treatment indicator    
+  if (any(is.na(A[avail == 1]))) {
+    stop("Treatment indicator is NA where availability = 1.")
+  }
+  A[avail == 0] <- 0
+  
+  p_t <- dta[, rand_prob_varname]
+  cA <- A - p_t # centered A
+  Y <- dta[, outcome_varname]
+  Xdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, moderator_varname] ) ) # X (moderator) design matrix, intercept added
+  Zdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, control_varname] ) ) # Z (control) design matrix, intercept added
   
   if (is.null(rand_prob_tilde_varname) & is.null(rand_prob_tilde)) {
     p_t_tilde <- rep(0.5, nrow(dta))
@@ -1208,7 +1264,7 @@ weighted_centered_least_square2 <- function(
     
     ef <- rep(NA, length(theta)) # value of estimating function
     for (i in 1:q) {
-      ef[i] <- sum( weight * residual * avail * WCLS_weight * exp_Zdm_alpha * Zdm[, i])
+      ef[i] <- sum( weight * residual * avail * WCLS_weight * Zdm[, i])
     }
     for (i in 1:p) {
       ef[q + i] <- sum( weight * residual * avail * WCLS_weight * cA_tilde * Xdm[, i])
@@ -1227,7 +1283,7 @@ weighted_centered_least_square2 <- function(
       multiroot(estimating_equation, estimator_initial_value)
     },
     error = function(cond) {
-      message("\nCatched error in multiroot inside weighted_centered_least_square2():")
+      message("\nCatched error in multiroot inside weighted_centered_least_square():")
       message(cond)
       return(list(root = rep(NaN, p + q), msg = cond,
                   f.root = rep(NaN, p + q)))
@@ -1266,8 +1322,8 @@ weighted_centered_least_square2 <- function(
     
     # partialD_partialtheta = \frac{\partial D^{(t),T}}{\partial \theta^T}, matrix of dim (p+q)*(p+q)
     partialD_partialtheta <- matrix(NA, nrow = p + q, ncol = p + q)
-    partialD_partialtheta[1:q, 1:q] <- pre_multiplier * exp(Zalpha) * (Zdm[it, ] %o% Zdm[it, ])
-    partialD_partialtheta[1:q, (q+1):(q+p)] <- - pre_multiplier * exp(Zalpha) * A[it] * (Zdm[it, ] %o% Xdm[it, ])
+    partialD_partialtheta[1:q, 1:q] <- 0
+    partialD_partialtheta[1:q, (q+1):(q+p)] <- - pre_multiplier * A[it] * (Zdm[it, ] %o% Xdm[it, ])
     partialD_partialtheta[(q+1):(q+p), 1:q] <- 0
     partialD_partialtheta[(q+1):(q+p), (q+1):(q+p)] <- - pre_multiplier * A[it] * cA_tilde[it] * (Xdm[it, ] %o% Xdm[it, ])
     
@@ -1276,7 +1332,7 @@ weighted_centered_least_square2 <- function(
     r_term_collected[it] <- r_term
     
     # D_term = D^{(t),T} (dim = (p+q) * 1)
-    D_term <- pre_multiplier * c(exp(Zalpha) * Zdm[it, ], cA_tilde[it] * Xdm[it, ])
+    D_term <- pre_multiplier * c(Zdm[it, ], cA_tilde[it] * Xdm[it, ])
     D_term_collected[, it] <- D_term
     
     # partialr_partialtheta = \frac{\partial r^(t)}{\partial \theta^T}
@@ -1336,8 +1392,6 @@ weighted_centered_least_square2 <- function(
   return(list(beta_hat = beta_hat, alpha_hat = alpha_hat,
               beta_se = beta_se, alpha_se = alpha_se,
               beta_se_adjusted = beta_se_adjusted, alpha_se_adjusted = alpha_se_adjusted,
-              # test_result_t = test_result_t,
-              # test_result_f = test_result_f,
               varcov = varcov,
               varcov_adjusted = varcov_adjusted,
               dims = list(p = p, q = q),

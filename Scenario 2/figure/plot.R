@@ -1,58 +1,48 @@
-load("~/binary_mrt/Scenario 2/figure/test.RData")
-
-df = data.frame(matrix(NA, nrow =11 , ncol = 2))
+load("~/binary_mrt/Scenario 2/figure/test_cwcls_var.RData")
+library(ggplot2)
+df = data.frame(matrix(NA, nrow =22 , ncol = 2))
 colnames(df) = c("SD","Coverage")
 
-df[,"SD"] = 0:10/100
-df[,"Coverage"] = result_df_collected$cp.adj[c(11,1:10)]
+df[,"SD"] = rep(0:10/10,2)
+df[1:11,"Coverage"] = result_df_collected_1$cp.adj[c(11,1:10)]
+
+load("~/binary_mrt/Scenario 2/figure/test-var.RData")
+df[12:22,"Coverage"] = result_df_collected_2$cp.adj[c(11,1:10)]
+
+df[,"Method"] = rep(c("C-WCLS","EMEE"),each = 11)
+
 
 ggplot(data = df)+
-  geom_line(aes(x=SD,y=Coverage))+
-  xlab("Standard Deviation")+
+     geom_line(aes(x=SD,y=Coverage, colour =Method))+
+     xlab("Standard Deviation")+
+     ylab("Coverage Probability")+
+     theme_bw()+
+     scale_y_continuous(breaks = seq(0.65,1,0.05),limits = c(0.65,1))+
+     geom_hline(yintercept = 0.95,linetype="dashed")
+
+
+
+library(ggpubr)
+
+# Two plots
+
+df = data.frame(matrix(NA, nrow =18, ncol = 3))
+colnames(df) = c("Method","size","Coverage")
+df[,"Method"] = rep(c("C-WCLS","EMEE"),each = 9)
+
+load("~/binary_mrt/Scenario 2/figure/group_size_cwcls.RData")
+df[1:9,"Coverage"] = result_df_collected_1$cp.adj[1:9]
+
+load("~/binary_mrt/Scenario 2/figure/test_groupsize.RData")
+df[10:18,"Coverage"] = result_df_collected_2$cp.adj[1:9]
+df[,"size"] = rep(c(1,2,4,5,8,10,12,15,18),2)
+
+df$Method = as.factor(df$Method)
+
+ggplot(data = df)+
+  geom_line(aes(x=size,y=Coverage, colour =Method))+
+  xlab("Group Size")+
   ylab("Coverage Probability")+
   theme_bw()+
-  scale_y_continuous(breaks = seq(0.8,1,0.05),limits = c(0.8,1))+
+  scale_y_continuous(breaks = seq(0.55,1,0.05),limits = c(0.55,1))+
   geom_hline(yintercept = 0.95,linetype="dashed")
-
-
-
-
-# library(ggplot2)
-# library(ggpubr)
-# 
-# # Two plots
-# 
-# df = data.frame(matrix(NA, nrow =20, ncol = 3))
-# colnames(df) = c("Method","size","Coverage")
-# 
-# df[,"size"] = rep(c(1,2,4,5,10,6,8,11,13,15),2)
-# 
-# 
-# setwd("C:/Users/herashi/Desktop/figure/group_size")
-# 
-# for (k in 1:10){
-#   load(paste0("test-",k,".RData"))
-#   df[k,"Method"] = "WCLS"
-#   df[k,"Coverage"] =  omit[1,"cpc"]
-# }
-# 
-# 
-# setwd("C:/Users/herashi/Desktop/figure/group_size_Gwcls")
-# 
-# for (k in 1:10){
-#   load(paste0("test-",k,".RData"))
-#   df[10+ k,"Method"] = "C-WCLS"
-#   df[10+ k,"Coverage"] =  omit[1,"cpc"]
-# }
-# 
-# 
-# 
-# df$Method = as.factor(df$Method)
-# 
-# p1 <- ggplot(data = df)+
-#   geom_line(aes(x=size,y=Coverage, colour =Method))+
-#   xlab("Group Size")+
-#   ylab("Coverage Probability")+
-#   theme_bw()+
-#   scale_y_continuous(breaks = seq(0.6,1,0.05),limits = c(0.6,1))+
-#   geom_hline(yintercept = 0.95,linetype="dashed")

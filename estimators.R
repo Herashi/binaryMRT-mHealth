@@ -807,6 +807,7 @@ efficient_ee_modified_weight <- function(
 
 weighted_centered_least_square <- function(
   dta,
+  group_ls,
   id_varname,
   decision_time_varname,
   treatment_varname,
