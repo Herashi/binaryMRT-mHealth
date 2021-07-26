@@ -1,12 +1,3 @@
-# for binary outcome
-
-# Tianchen Qian, 2018.07.24
-
-# In this code, I constructed examples where:
-# p_t is constant (0.5)
-# S_t (covariate) takes 3 values {0,1,2}
-# and the log linear GEE is biased for beta.
-
 source("group_size.R")
 
 expit <- function(x){
