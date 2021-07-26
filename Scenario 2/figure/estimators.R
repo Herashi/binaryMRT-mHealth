@@ -57,8 +57,7 @@ library(rootSolve) # for solver function multiroot()
 library(geepack) # for fitting GEE using package
 library(brm) # for Richardson et al. 2017 JASA method brm()
 
-get_alpha_beta_from_multiroot_result <- function(root, p, q)
-{
+get_alpha_beta_from_multiroot_result <- function(root, p, q){
   if (p == 1) {
     beta_root <- root$root[q+1]
   } else {

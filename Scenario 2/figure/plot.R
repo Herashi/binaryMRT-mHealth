@@ -12,12 +12,12 @@ df[12:22,"Coverage"] = result_df_collected_2$cp.adj[c(11,1:10)]
 df[,"Method"] = rep(c("C-WCLS","EMEE"),each = 11)
 
 
-ggplot(data = df)+
+p1 <- ggplot(data = df)+
      geom_line(aes(x=SD,y=Coverage, colour =Method))+
      xlab("Standard Deviation")+
      ylab("Coverage Probability")+
      theme_bw()+
-     scale_y_continuous(breaks = seq(0.65,1,0.05),limits = c(0.65,1))+
+     scale_y_continuous(breaks = seq(0.55,1,0.05),limits = c(0.55,1))+
      geom_hline(yintercept = 0.95,linetype="dashed")
 
 
@@ -39,10 +39,12 @@ df[,"size"] = rep(c(1,2,4,5,8,10,12,15,18),2)
 
 df$Method = as.factor(df$Method)
 
-ggplot(data = df)+
+p2 <- ggplot(data = df)+
   geom_line(aes(x=size,y=Coverage, colour =Method))+
   xlab("Group Size")+
   ylab("Coverage Probability")+
   theme_bw()+
   scale_y_continuous(breaks = seq(0.55,1,0.05),limits = c(0.55,1))+
   geom_hline(yintercept = 0.95,linetype="dashed")
+
+ggarrange(p2,p1,legend = "top",common.legend = T)

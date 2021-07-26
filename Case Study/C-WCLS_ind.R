@@ -1,6 +1,30 @@
+library(rootSolve) # for solver function multiroot()
+
+get_alpha_beta_from_multiroot_result <- function(root, p, q){
+  if (p == 1) {
+    beta_root <- root$root[q+1]
+  } else {
+    beta_root <- as.matrix(root$root[(q+1) : (q+p)])
+  }
+  if (q == 1) {
+    alpha_root <- root$root[1]
+  } else {
+    alpha_root <- as.matrix(root$root[1:q])
+  }
+  return(list(alpha = alpha_root, beta = beta_root))
+}
+
+find_change_location <- function(v){
+  n <- length(v)
+  if (n <= 1) {
+    stop("The vector need to have length > 1.")
+  }
+  return(c(1, 1 + which(v[1:(n-1)] != v[2:n])))
+}
+
 weighted_centered_least_square <- function(
   dta,
-  group_ls,
+  group,
   id_varname,
   decision_time_varname,
   treatment_varname,
@@ -85,7 +109,7 @@ weighted_centered_least_square <- function(
   A[avail == 0] <- 0
   
   p_t <- dta[, rand_prob_varname]
-  cA <- A - p_t # centered A
+  # cA <- A - p_t # centered A
   Y <- dta[, outcome_varname]
   Xdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, moderator_varname] ) ) # X (moderator) design matrix, intercept added
   Zdm <- as.matrix( cbind( rep(1, nrow(dta)), dta[, control_varname] ) ) # Z (control) design matrix, intercept added
@@ -106,7 +130,9 @@ weighted_centered_least_square <- function(
   } else {
     p_t_tilde <- dta[, rand_prob_tilde_varname]
   }
-  cA_tilde <- A - p_t_tilde
+  # cA_tilde <- A - p_t_tilde
+  # A here is the indirect effect, no need to be centered
+  cA_tilde <- A
   
   WCLS_weight <- ifelse(A, p_t_tilde / p_t, (1 - p_t_tilde) / (1 - p_t))
   
@@ -117,8 +143,10 @@ weighted_centered_least_square <- function(
   Znames <- c("Intercept", control_varname)
   
   ### 2. estimation ###
+  person_first_index <- c(find_change_location(dta[, id_varname]), total_person_decisionpoint + 1)
   
   estimating_equation <- function(theta) {
+    
     alpha <- as.matrix(theta[1:q])
     beta <- as.matrix(theta[(q+1):(q+p)])
     
@@ -128,17 +156,38 @@ weighted_centered_least_square <- function(
     residual <- Y - exp_Zdm_alpha * exp_AXdm_beta
     weight <- exp_AXdm_beta^(-1)
     
-    ef <- rep(NA, length(theta)) # value of estimating function
+    
+    ef <- array(NA, dim = c(total_person_decisionpoint, length(theta)))
     for (i in 1:q) {
-      ef[i] <- sum( weight * residual * avail * WCLS_weight * Zdm[, i])
+      ef[,i] <- weight * residual * avail * WCLS_weight * Zdm[, i]
     }
     for (i in 1:p) {
-      ef[q + i] <- sum( weight * residual * avail * WCLS_weight * cA_tilde * Xdm[, i])
+      ef[,q + i] <- weight * residual * avail * WCLS_weight * cA_tilde * Xdm[, i]
     }
     
-    ef <- ef / sample_size
+    ef_n <- matrix(NA, nrow =sample_size, ncol =p+q)
+    for (i in 1:sample_size) {
+      ef_n[i, ] <- apply(ef[person_first_index[i] : (person_first_index[i+1] - 1),], 2, sum)
+    }
+    
+    ef <- rep(0, length(theta)) # value of estimating function
+    
+    for (g in group[["id"]]){
+      row_ind = which(group[["group_id"]]==g)
+      g_size = group[["group size"]][g]
+      
+      if(g_size > 1){
+        ef_g <-apply(ef_n[row_ind,],2,sum)
+      }else{
+        ef_g = ef_n[row_ind,]
+      }
+      ef = ef+ef_g/g_size
+    }
+    
+    ef <- ef / group[["#groups"]]
     return(ef)
   }
+  
   
   if (is.null(estimator_initial_value)) {
     estimator_initial_value <- rep(0, length = p + q)
@@ -162,9 +211,6 @@ weighted_centered_least_square <- function(
   beta_hat <- as.vector(estimator$beta)
   
   ### 3. asymptotic variance ###
-  
-  group = group_str(group_ls)
-  person_first_index <- c(find_change_location(dta[, id_varname]), total_person_decisionpoint + 1)
   
   ### 3.1 Compute M_n matrix (M_n is the empirical expectation of the derivative of the estimating function) ###
   
@@ -213,24 +259,10 @@ weighted_centered_least_square <- function(
     Mn_summand[it, , ] <- partialD_partialtheta * r_term + D_term %o% partialr_partialtheta
   }
   
-  
-  Mn <- apply(Mn_summand, c(2,3), sum) 
+  Mn_sum <- apply(Mn_summand, c(2,3), sum)
+  Mn <- Mn_sum/sample_size 
   Mn_inv <- solve(Mn)
-  
-  # Mn_n <- array(NA, dim = c(sample_size, p+q, p+q))
-  # for (i in 1:sample_size) {
-  #   Mn_n[i, , ] <- apply(Mn_summand[person_first_index[i] : (person_first_index[i+1] - 1),,], c(2,3), sum)
-  # }
-  
-  # bread = array(NA, dim = c(group[["#groups"]], p+q, p+q))
-  
-  # for (g in unique(group[["group_id"]])){
-  #   row_ind = which(group[["group_id"]]==g)
-  #   bread_g = apply(Mn_n[row_ind,,], c(2,3), sum)
-  #   bread[g,,] = solve(bread_g)
-  # }
-  
-  
+
   
   ### 3.2 Compute \Sigma_n matrix (\Sigma_n is the empirical variance of the estimating function) ###
   
@@ -249,22 +281,24 @@ weighted_centered_least_square <- function(
   
   meat = 0
   
+  pair_group_table = dta[,c("pairid","group_id")]%>% distinct()
+  
   for (g in unique(group[["group_id"]])){
-    row_ind = which(group[["group_id"]]==g)
+    pair_ind = which(pair_group_table$group_id==g)
     g_size = group[["group size"]][g]
     meat_g = 0
     
-    for (i in row_ind) {
+    for (i in pair_ind) {
       a = Sigman_summand[,i]
-      for(j in row_ind){
+      for(j in pair_ind){
         b = Sigman_summand[,j]
         meat_g =meat_g + a %*% t(b)
       }
     }
-    meat = meat+meat_g
+    meat = meat+meat_g/ g_size
   }
   
-  Sigman <- meat
+  Sigman <- meat/group[["#groups"]]
   ######################################
   
   varcov <- Mn_inv %*% Sigman %*% t(Mn_inv)
@@ -274,12 +308,14 @@ weighted_centered_least_square <- function(
   
   ### 4. small sample correction ###
   # MD-corrected (Mancl and DeRouen) sandwich estimator
-  
+
   Sigman_tilde <- array(NA, dim = c(p+q,sample_size))
-  n_group = group[["#groups"]]
-  bread_g = Mn_inv* n_group  # use this to approximate the group bread
+  Mn_sum_inv <- solve(Mn_sum)
   
   for (i in 1:sample_size) {
+    g = group[["group_id"]][i]
+    n_group = group[["group size"]][g]
+    bread_g = Mn_sum_inv* n_group  # use this to approximate the group bread
     D_term_i <- D_term_collected[, person_first_index[i] : (person_first_index[i+1] - 1)]
     r_term_i <- matrix(r_term_collected[person_first_index[i] : (person_first_index[i+1] - 1)], ncol = 1)
     partialr_partialtheta_i <- partialr_partialtheta_collected[person_first_index[i] : (person_first_index[i+1] - 1), ]
@@ -294,22 +330,22 @@ weighted_centered_least_square <- function(
   meat_tilde = 0
   
   for (g in unique(group[["group_id"]])){
-    row_ind = which(group[["group_id"]]==g)
+    pair_ind = which(pair_group_table$group_id==g)
     g_size = group[["group size"]][g]
     meat_g = 0
     
-    for (i in row_ind) {
+    for (i in pair_ind) {
       a = Sigman_tilde[,i]
-      for(j in row_ind){
+      for(j in pair_ind){
         b = Sigman_tilde[,j]
         meat_g =meat_g + a %*% t(b)
       }
     }
     
-    meat_tilde = meat_tilde + meat_g
+    meat_tilde = meat_tilde + meat_g/g_size
   }
   
-  Sigman_tilde <- meat_tilde
+  Sigman_tilde <- meat_tilde/group[["#groups"]]
   
   varcov_adjusted <- Mn_inv %*% Sigman_tilde %*% t(Mn_inv)
   alpha_se_adjusted <- sqrt(diag(varcov_adjusted)[1:q])

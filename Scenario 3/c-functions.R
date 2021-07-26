@@ -2,31 +2,46 @@ library(truncnorm)
 
 ## specify group structure
 group_all = list()
-group_all[["250"]] = list()
-group_all[["500"]] = list()
-group_all[["1000"]] = list()
-
-# maximum b_g sigma2 can go 0.75^2
-
-group_all[["250"]][["n"]] = 250
-group_all[["250"]][["group_id"]] = rep(1:25,each=10)
-group_all[["250"]][["e_g sigma2"]] = rep(0,25)
-group_all[["250"]][["b_g sigma2"]] = rep(0.5,25)
-
-
-group_all[["500"]][["n"]] = 500
-group_all[["500"]][["group_id"]] = rep(1:50,each=10)
-group_all[["500"]][["e_g sigma2"]] = rep(0,50)
-group_all[["500"]][["b_g sigma2"]] = rep(0.5,50)
-
-
-group_all[["1000"]][["n"]] = 1000
-group_all[["1000"]][["group_id"]] = rep(1:40,each=25)
-group_all[["1000"]][["e_g sigma2"]] = rep(0,40)
-group_all[["1000"]][["b_g sigma2"]] = rep(0.5,40)
+group_all[[1]] = list()
+group_all[[2]] = list()
+group_all[[3]] = list()
+group_all[[4]] = list()
+group_all[[5]] = list()
+group_all[[6]] = list()
 
 
 
+
+
+group_all[[1]][["n"]] = 125
+group_all[[1]][["group_id"]] = rep(1:25,each=5)
+group_all[[1]][["e_g sigma2"]] = rep(0,25)
+group_all[[1]][["b_g sigma2"]] = rep(0.5^2,25)
+
+group_all[[2]][["n"]] = 250
+group_all[[2]][["group_id"]] = rep(1:25,each=10)
+group_all[[2]][["e_g sigma2"]] = rep(0,25)
+group_all[[2]][["b_g sigma2"]] = rep(0.5^2,25)
+
+group_all[[3]][["n"]] = 500
+group_all[[3]][["group_id"]] = rep(1:50,each=10)
+group_all[[3]][["e_g sigma2"]] = rep(0,50)
+group_all[[3]][["b_g sigma2"]] = rep(0.5^2,50)
+
+group_all[[4]][["n"]] = 1000
+group_all[[4]][["group_id"]] = rep(1:50,each=20)
+group_all[[4]][["e_g sigma2"]] = rep(0,50)
+group_all[[4]][["b_g sigma2"]] = rep(0.5^2,50)
+
+group_all[[5]][["n"]] = 2000
+group_all[[5]][["group_id"]] = rep(1:100,each=20)
+group_all[[5]][["e_g sigma2"]] = rep(0,100)
+group_all[[5]][["b_g sigma2"]] = rep(0.5^2,100)
+
+group_all[[6]][["n"]] = 2500
+group_all[[6]][["group_id"]] = rep(1:100,each=25)
+group_all[[6]][["e_g sigma2"]] = rep(0,100)
+group_all[[6]][["b_g sigma2"]] = rep(0.5^2,100)
 
 
 
@@ -75,3 +90,5 @@ group_str = function(group){
   
   return(group)
 } 
+
+

@@ -1,0 +1,734 @@
+---
+title: "Case Study"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("~/binary_mrt/Case Study")
+library(readr)
+load("imputation_list_daily_separated_no_mess_sep.RData")
+# load("reduced_US_step_sleep_mood_daily_2018_full.RData")
+# load("cleaned_reduced_intervention_data_full.RData")
+IHSdata_2018 <- read_csv("IHSdata_2018.csv")
+colnames(IHSdata_2018)[1] <- "USERID"
+study_data = impute_list[[1]]
+library(dplyr)
+library(geepack)
+library(tidyr)
+`%notin%` <- Negate(`%in%`)
+```
+
+```{r eval=FALSE, include=FALSE}
+full_data = study_data$full_data
+full_data_complete  = study_data$full_data_complete
+
+
+# Add daily survey completion
+full_data_complete = full_data_complete %>%
+  mutate(MOOD = full_data$MOOD,
+         Daily_complete = ifelse(is.na(MOOD),0,1))
+
+# merge with IHSdata
+full_data_complete = full_data_complete %>%
+  mutate(NOTIFICATION = ifelse(NOTIFICATION_TYPE == "no_message",0,1))%>%
+  left_join(IHSdata_2018[,c("USERID","Specialty","INSTITUTION_STANDARD")],by = "USERID")%>%
+  drop_na(Specialty)%>%
+  arrange(USERID,date_day)%>%
+  mutate(USERID = as.factor(USERID))%>%
+  group_by(USERID) %>% 
+  mutate(Day = row_number())
+
+# calculate weights
+weights = full_data_complete %>%
+  group_by(Specialty)%>%
+  count()%>%
+  mutate(weights = 1/n)%>%
+  select(-n)
+
+# filter out unsure week category
+full_data_complete = full_data_complete %>%
+  left_join(weights, by = "Specialty")%>%
+  filter(week_category != 'unsure')
+
+full_data_complete$week_category = factor(as.character(full_data_complete$week_category),
+                                          levels = c("None","mood","sleep","activity"))
+
+# mean(full_data_complete$NOTIFICATION,na.rm = T)
+
+## Add last week's mood score average & average completion of daily surveys
+
+full_data_complete$MOODprev = rep(NA,nrow(full_data_complete))
+full_data_complete$DAILYprev = rep(NA,nrow(full_data_complete))
+
+for (i in 1:nrow(full_data_complete)) {
+  if(full_data_complete$Day[i] >7){
+    full_data_complete$MOODprev[i] = mean(full_data_complete$MOOD[(i-7):(i-1)],na.rm = T)
+    full_data_complete$DAILYprev[i] = mean(full_data_complete$Daily_complete[(i-7):(i-1)],na.rm = T)
+  }else if(full_data_complete$Day[i] == 1){
+    full_data_complete$MOODprev[i] = full_data_complete$MOOD[i]
+    full_data_complete$DAILYprev[i] = full_data_complete$Daily_complete[i]
+  }else{
+    j = full_data_complete$Day[i]
+    full_data_complete$MOODprev[i] = mean(full_data_complete$MOOD[(i-j+1):(i-1)],na.rm = T)
+    full_data_complete$DAILYprev[i] =mean(full_data_complete$Daily_complete[(i-j+1):(i-1)],na.rm = T)
+  }
+}
+
+is.nan.data.frame <- function(x)
+  do.call(cbind, lapply(x, is.nan))
+
+full_data_complete[is.nan(full_data_complete)] <- NA 
+
+
+# CONSTRUCT GROUP-LEVEL DAILYprev
+aggDAILY = aggregate(Daily_complete~date_day+Specialty+Day, data = full_data_complete, FUN = mean) 
+countDAILY = aggregate(rep(1,nrow(full_data_complete))~date_day+Specialty+Day, data = full_data_complete, FUN = sum)
+names(aggDAILY) = c("date_day", "Specialty", "Day","Daily")
+names(countDAILY) = c("date_day", "Specialty","Day","Daily") 
+
+aggDAILY = arrange(aggDAILY,Specialty,date_day)
+countDAILY = arrange(countDAILY,Specialty,date_day)
+
+aggDAILY$yesterday_complete = NA
+countDAILY$yesterday_complete = NA
+
+for (i in 1:nrow(aggDAILY)){
+  if(aggDAILY$Day[i]>1){
+    aggDAILY$yesterday_complete[i] = aggDAILY$Daily[i-1]
+    countDAILY$yesterday_complete[i] = countDAILY$Daily[i-1]
+  }else{
+    aggDAILY$yesterday_complete[i] = aggDAILY$Daily[i]
+    countDAILY$yesterday_complete[i] = countDAILY$Daily[i]
+  }
+}
+
+full_data_complete$yesterday_complete = NA
+  
+for (i in 1:nrow(full_data_complete)){
+  if(full_data_complete$Day[i]>1){
+    full_data_complete$yesterday_complete[i] = full_data_complete$Daily_complete[i-1]
+  }else{
+    full_data_complete$yesterday_complete[i] = full_data_complete$Daily_complete[i]
+  }
+}
+
+match = function(iter) {
+   x = full_data_complete[iter,]
+   agg = aggDAILY$yesterday_complete[aggDAILY$date_day == x$date_day & aggDAILY$Specialty == x$Specialty]
+   count = countDAILY$yesterday_complete[countDAILY$date_day == x$date_day & countDAILY$Specialty == x$Specialty]
+   if (count == 1) {
+     return(0)
+   }else {
+     return(count/(count-1) * agg - x$yesterday_complete/(count-1))
+   }
+}
+
+test = lapply(1:nrow(full_data_complete), match)
+full_data_complete$aggDAILY = unlist(test)
+
+save(full_data_complete,file = "full_data_complete.RData")
+
+
+##################################
+# Indirect effect
+##################################
+load("full_data_complete.RData")
+## REMOVE BLANK INSTITUTIONS
+full_data_complete = full_data_complete %>% drop_na(INSTITUTION_STANDARD)
+
+## MAKE INDIRECT DATASET
+combos = aggregate(USERID ~ Specialty + INSTITUTION_STANDARD, data = full_data_complete, FUN = function(x){length(unique(x))})
+save(combos,file = "combos.RData")
+
+setofdays = unique(full_data_complete$Day)
+indirectfulldata = data.frame()
+
+for (i in 1:nrow(combos)) {
+  print(paste("On specialty:", combos[i,1]))
+  specialty = combos[i,1]
+  print(paste("On Institution:", combos[i,2]))
+  institution = combos[i,2]
+  if(combos[i,3] > 1) {print("Bigger than 1")}
+  for (j in 1:length(setofdays)) {
+    day= setofdays[j]
+    test = subset(full_data_complete, Specialty == specialty & Day == day & INSTITUTION_STANDARD == institution)
+    groupsize = nrow(test)
+    setofusers = unique(test$USERID)
+    # newweight = exp(log(subsetsize) - log(groupsize) - log(choose(groupsize,subsetsize)))
+    if(groupsize > 1) {
+      for (k in 1:length(setofusers)) {
+        print(k)
+        user = test$USERID[k]
+        otherusers = test$USERID[-k]
+        otherusersaction = test$NOTIFICATION[is.element(test$USERID, otherusers)]
+        otherusersmood = test$MOODprev[is.element(test$USERID, otherusers)]
+        otherusersdaily = test$DAILYprev[is.element(test$USERID, otherusers)]
+        newdata = data.frame(test[rep(k,groupsize-1),], otherusers, otherusersaction, otherusersmood,otherusersdaily)
+        newdata$newweights = rep(1/(groupsize*(groupsize-1)),groupsize-1)
+        indirectfulldata = rbind(indirectfulldata, (newdata))
+      }
+    }
+  }
+}
+
+indirectfulldata$centeredaction = (1-indirectfulldata$NOTIFICATION)*(indirectfulldata$otherusersaction-3/8)
+indirectfulldata$centeredaction2 = indirectfulldata$NOTIFICATION*(indirectfulldata$otherusersaction-3/8)
+
+indirectfulldata$centeredaction_week = indirectfulldata$NOTIFICATION*(indirectfulldata$otherusersaction-0.5)*indirectfulldata$study_week
+indirectfulldata$centeredaction2_week = indirectfulldata$NOTIFICATION*(indirectfulldata$otherusersaction-0.5)*indirectfulldata$study_week
+
+load("indirectfulldata.RData")
+
+whichcombo <- function(x) {
+  which(combos$Specialty == as.numeric(x[11]) & 
+          combos$INSTITUTION_STANDARD == as.character(x[12]))
+}
+indirectfulldata$specinst_id = apply(indirectfulldata, MARGIN = 1, FUN = whichcombo)
+
+save(indirectfulldata, file = "indirectfulldata.RData")
+```
+
+
+## Direct Effect
+
+```{r}
+load("full_data_complete.RData")
+
+# cluster_size = full_data_complete %>%
+#   distinct(USERID,Specialty,INSTITUTION_STANDARD)%>%
+#   group_by(Specialty,INSTITUTION_STANDARD)%>%
+#   count()
+
+cluster_size = full_data_complete %>%
+  distinct(USERID,Specialty)%>%
+  group_by(Specialty)%>%
+  count() 
+
+cluster_size$group_id = 1:nrow(cluster_size)
+
+dta = full_data_complete %>% 
+  filter(week_category != 'None')%>%
+  mutate(mood_week = ifelse(week_category == "mood",1,0),
+         sleep_week = ifelse(week_category == "sleep",1,0),
+         activity_week = ifelse(week_category == "activity",1,0),
+         study_week_2 = study_week^2)
+
+
+dta$week_category = factor(as.character(dta$week_category),
+                            levels = c("sleep","mood","activity"))
+dta$week_category_num = as.numeric(dta$week_category)
+
+
+dta$NOTIFICATION_TYPE = factor(as.character(dta$NOTIFICATION_TYPE),
+                            levels = c("no_message","life insight","tip"))
+#unique(dta$NOTIFICATION_TYPE)
+dta$NOTIFICATION_TYPE_num = as.numeric(dta$NOTIFICATION_TYPE)
+
+# User_specialty = dta %>% 
+#   select(USERID,Specialty,INSTITUTION_STANDARD)%>%
+#   distinct()%>%
+#   left_join(cluster_size[,c(1,2,4)], by = c("Specialty","INSTITUTION_STANDARD"))
+
+User_specialty = dta %>% 
+  select(USERID,Specialty)%>%
+  distinct()%>%
+  left_join(cluster_size[,c(1,3)], by = c("Specialty"))
+
+# construct the group structure
+group = list()
+group[["group_id"]] = as.matrix(User_specialty[,"group_id"])
+group[["group size"]] = unname(table(group[["group_id"]]))
+group[["#groups"]] = length(unique(group[["group_id"]]))
+group[["id"]] = unique(group[["group_id"]])
+
+dta$prob_A <- 0.5
+```
+
+### analysis 1: Only Mood Week
+
+```{r}
+source("C-WCLS.R")
+dta_mood = dta %>% filter(week_category == "mood")
+
+control_vars <- c("DAILYprev","study_week")
+moderator_vars <- NULL
+
+## our method
+ 
+fit_wcls <- weighted_centered_least_square(
+  dta = dta_mood,
+  group=group,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+
+## Qian's method
+ 
+fit_wcls_2 <- weighted_centered_least_square2(
+  dta = dta_mood,
+  group_ls=group_ls,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+t_quantile <- qt(0.975, length(unique(dta_mood$Specialty)) - 1 - 2) 
+```
+
+### Direct Effect Estimation summary
+
+#### Our method
+
+```{r}
+dta_mood %>% group_by(NOTIFICATION) %>% summarise(m = mean(Daily_complete))
+```
+
+##### point estimation
+
+```{r}
+fit_wcls$beta_hat 
+```
+
+##### adjusted SE
+```{r}
+fit_wcls$beta_se_adjusted 
+```
+
+##### 95% CI
+```{r}
+rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
+      fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
+```
+
+##### p value
+```{r}
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta_mood$Specialty)) - 1 - 2, lower.tail = FALSE) 
+```
+
+#### Qian's method
+
+##### point estimation
+
+```{r}
+fit_wcls_2$beta_hat 
+```
+##### adjusted SE
+```{r}
+fit_wcls_2$beta_se_adjusted 
+```
+##### 95% CI
+```{r}
+rbind(fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
+      fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted)
+```
+
+##### p value
+```{r}
+2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df = length(unique(dta_mood$Specialty))- 1 - 2, lower.tail = FALSE) 
+```
+
+
+
+### analysis 2: Only Activity Week
+
+
+```{r}
+dta_activity = dta %>% filter(week_category == "activity")
+
+control_vars <- c("study_week","DAILYprev")
+moderator_vars <- NULL
+
+## our method
+ 
+fit_wcls <- weighted_centered_least_square(
+  dta = dta_activity,
+  group=group,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+
+## Qian's method
+ 
+fit_wcls_2 <- weighted_centered_least_square2(
+  dta = dta_activity,
+  group_ls=group_ls,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+t_quantile <- qt(0.975, length(unique(dta_activity$Specialty)) - 1 - 2) 
+```
+
+### Direct Effect Estimation summary
+
+#### Our method
+
+```{r}
+dta_activity %>% group_by(NOTIFICATION) %>% summarise(m = mean(Daily_complete))
+```
+
+##### point estimation
+
+```{r}
+fit_wcls$beta_hat 
+```
+
+##### adjusted SE
+```{r}
+fit_wcls$beta_se_adjusted 
+```
+
+##### 95% CI
+```{r}
+rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
+      fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
+```
+
+##### p value
+
+```{r}
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta_activity$Specialty)) - 1 - 2, lower.tail = FALSE) 
+```
+
+#### Qian's method
+
+##### point estimation
+
+```{r}
+fit_wcls_2$beta_hat 
+```
+##### adjusted SE
+```{r}
+fit_wcls_2$beta_se_adjusted 
+```
+##### 95% CI
+```{r}
+rbind(fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
+      fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted)
+```
+
+##### p value
+```{r}
+2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df =length(unique(dta_activity$Specialty)) - 1 - 2, lower.tail = FALSE) 
+```
+
+### analysis 3: Only Sleep Week
+
+
+```{r}
+dta_sleep = dta %>% filter(week_category == "sleep")
+
+control_vars <- c("study_week","DAILYprev")
+moderator_vars <- NULL
+
+## our method
+ 
+fit_wcls <- weighted_centered_least_square(
+  dta = dta_sleep,
+  group=group,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+
+## Qian's method
+ 
+fit_wcls_2 <- weighted_centered_least_square2(
+  dta = dta_sleep,
+  group_ls=group_ls,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+t_quantile <- qt(0.975, length(unique(dta_sleep$Specialty)) - 1 - 2) 
+```
+
+### Direct Effect Estimation summary
+
+#### Our method
+
+```{r}
+dta_sleep %>% group_by(NOTIFICATION) %>% summarise(m = mean(Daily_complete))
+```
+
+##### point estimation
+
+```{r}
+fit_wcls$beta_hat 
+```
+
+##### adjusted SE
+```{r}
+fit_wcls$beta_se_adjusted 
+```
+
+##### 95% CI
+```{r}
+rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
+      fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
+```
+
+##### p value
+
+```{r}
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta_sleep$Specialty)) - 1 - 2, lower.tail = FALSE) 
+```
+
+#### Qian's method
+
+##### point estimation
+
+```{r}
+fit_wcls_2$beta_hat 
+```
+##### adjusted SE
+```{r}
+fit_wcls_2$beta_se_adjusted 
+```
+##### 95% CI
+```{r}
+rbind(fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
+      fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted)
+```
+
+##### p value
+```{r}
+2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df =length(unique(dta_sleep$Specialty)) - 1 - 2, lower.tail = FALSE) 
+```
+
+
+## Indirect Effect
+
+
+```{r}
+load("indirectfulldata.RData")
+
+cluster_size = indirectfulldata %>%
+  distinct(USERID,otherusers,Specialty,INSTITUTION_STANDARD)%>%
+  group_by(Specialty,INSTITUTION_STANDARD)%>%
+  count()%>%
+  arrange(n)
+
+# badids = (head(cluster_size[,1],8))
+
+dta = indirectfulldata %>% 
+  filter(week_category != 'None')%>%
+  mutate(mood_week = ifelse(week_category == "mood",1,0),
+         sleep_week = ifelse(week_category == "sleep",1,0),
+         activity_week = ifelse(week_category == "activity",1,0),
+         study_week_2 = study_week^2)
+
+# %>% filter(Specialty %notin% badids)
+
+cluster_size$group_id = 1:nrow(cluster_size)
+
+dta$week_category = factor(as.character(dta$week_category),
+                           levels = c("sleep","mood","activity"))
+dta$week_category_num = as.numeric(dta$week_category)
+
+
+dta$NOTIFICATION_TYPE = factor(as.character(dta$NOTIFICATION_TYPE),
+                               levels = c("no_message","life insight","tip"))
+#unique(dta$NOTIFICATION_TYPE)
+dta$NOTIFICATION_TYPE_num = as.numeric(dta$NOTIFICATION_TYPE)
+
+User_specialty = dta %>% 
+  select(USERID,otherusers,Specialty,INSTITUTION_STANDARD)%>%
+  distinct()%>%
+  left_join(cluster_size[,c(1,2,4)], by = c("Specialty","INSTITUTION_STANDARD"))
+
+User_specialty$ordered_pair_1 = NA
+User_specialty$ordered_pair_2 = NA
+
+for (i in 1:nrow(User_specialty)){
+  User_specialty[i,c(6,7)] = sort(User_specialty[i,c(1,2)])
+}
+
+User_specialty = User_specialty %>%
+  group_by(ordered_pair_1,ordered_pair_2)%>%
+  mutate(pairid = group_indices())
+
+dta = dta %>% 
+  left_join(User_specialty, by = c("USERID","otherusers","Specialty","INSTITUTION_STANDARD"))%>%
+  distinct(pairid,date_day,.keep_all = T)%>%
+  arrange(pairid,date_day)
+
+
+group_id = dta %>% select(group_id,pairid)%>%distinct()%>% select(group_id)
+
+# construct the group structure
+group = list()
+group[["group_id"]] = as.matrix(group_id)
+group[["group size"]] = unname(table(group[["group_id"]]))
+group[["#groups"]] = length(unique(group[["group_id"]]))
+group[["id"]] = unique(group[["group_id"]])
+
+dta$prob_A <- 0.5
+```
+
+
+
+### analysis 1: marginal excursion effect
+
+```{r}
+source("C-WCLS_ind.R")
+control_vars <- c("DAILYprev","study_week")
+moderator_vars <- NULL
+
+## our method
+
+fit_wcls <- weighted_centered_least_square(
+  dta = dta,
+  group=group,
+  id_varname = "pairid",
+  decision_time_varname = "Day",
+  treatment_varname = "centeredaction",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+t_quantile <- qt(0.975, length(unique(dta[, "pairid"])) - 1 - 2) 
+```
+
+
+### Indirect Effect Estimation summary
+
+#### Our method
+
+##### point estimation
+
+```{r}
+fit_wcls$beta_hat 
+```
+
+##### adjusted SE
+```{r}
+fit_wcls$beta_se_adjusted 
+```
+
+##### 95% CI
+```{r}
+rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
+      fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
+```
+
+##### p value
+```{r}
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta$USERID)) - 1 - 2, lower.tail = FALSE) 
+```
+
+
+### analysis 2: 
+
+```{r}
+control_vars <- c("DAILYprev","study_week")
+moderator_vars <- c("mood_week","activity_week")
+
+## our method
+
+fit_wcls <- weighted_centered_least_square(
+  dta = dta,
+  group=group,
+  id_varname = "pairid",
+  decision_time_varname = "Day",
+  treatment_varname = "centeredaction",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 0.5,
+  avail_varname = NULL,
+  estimator_initial_value = NULL
+)
+
+t_quantile <- qt(0.975, length(unique(dta[, "pairid"])) - 1 - 2) 
+```
+
+
+#### Our method
+
+##### point estimation
+
+```{r}
+fit_wcls$beta_hat 
+```
+
+##### adjusted SE
+```{r}
+fit_wcls$beta_se_adjusted 
+```
+
+##### 95% CI
+```{r}
+rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
+      fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
+```
+
+##### p value
+```{r}
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta$USERID)) - 1 - 2, lower.tail = FALSE) 
+```
+

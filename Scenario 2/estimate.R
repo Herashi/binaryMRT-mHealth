@@ -47,20 +47,21 @@ compute_result_beta <- function(beta_true, beta, beta_se, beta_se_adjusted, mode
 max_cores <- 4
 registerDoMC(min(detectCores() - 1, max_cores))
 
-sample_sizes <- c(250, 625, 1000)
+# sample_sizes <- c(250, 625, 1000)
 total_T <- 30
-nsim <- 500
+nsim <- 1000
 
 control_vars <- "S"
 moderator_vars <- c()
 
-result_df_collected <- data.frame()
+result_df_collected_1 <- data.frame()
+result_df_collected_2 <- data.frame()
 
 
-for (i_ss in 1:length(sample_sizes)) {
+for (i_ss in 1:6) {
   
-  sample_size <- sample_sizes[i_ss]
-  group_ls = group_all[[as.character(sample_size)]]
+  group_ls = group_all[[i_ss]]
+  sample_size <- group_ls[["n"]]
   
   result <- foreach(isim = 1:nsim, .combine = "c") %dorng% {
     if (isim %% 100 == 0) {
@@ -82,30 +83,42 @@ for (i_ss in 1:length(sample_sizes)) {
       rand_prob_tilde = 0.2,
       estimator_initial_value = NULL
     )
-    output <- list(fit_wcls = fit_wcls)
+    
+    fit_wcls_2 <- weighted_centered_least_square2(
+      dta = dta,
+      group_ls=group_ls,
+      id_varname = "userid",
+      decision_time_varname = "day",
+      treatment_varname = "A",
+      outcome_varname = "Y",
+      control_varname = control_vars,
+      moderator_varname = moderator_vars,
+      rand_prob_varname = "prob_A",
+      rand_prob_tilde_varname = NULL,
+      rand_prob_tilde = 0.2,
+      estimator_initial_value = NULL
+    )
+    output <- list(fit_wcls = fit_wcls,fit_wcls_2 = fit_wcls_2)
   }
   ee_names <- "wcls"
   alpha_names <- c("Intercept", control_vars)
   beta_names <- c("Intercept", moderator_vars)
   num_estimator <- length(ee_names)
   
+  result_1 = result[seq(1,2*nsim-1,by=2)]
+  result_2 = result[seq(2,2*nsim,by=2)]
   
-  # save(result,file="result_1000.RData")
-  #########################
-  
-  alpha <- matrix(sapply(result, function(l) l$alpha_hat), byrow = TRUE,nrow =nsim )
-  alpha_se <- matrix(sapply(result, function(l) l$alpha_se),byrow = TRUE,nrow =nsim)
-  alpha_se_adjusted <- matrix(sapply(result, function(l) l$alpha_se_adjusted),byrow = TRUE, nrow = nsim)
+  alpha <- matrix(sapply(result_1, function(l) l$alpha_hat), byrow = TRUE,nrow =nsim )
+  alpha_se <- matrix(sapply(result_1, function(l) l$alpha_se),byrow = TRUE,nrow =nsim)
+  alpha_se_adjusted <- matrix(sapply(result_1, function(l) l$alpha_se_adjusted),byrow = TRUE, nrow = nsim)
   
   colnames(alpha)= colnames(alpha_se)= colnames(alpha_se_adjusted) = alpha_names
   
-  beta <- matrix(sapply(result, function(l) l$beta_hat))
-  beta_se <- matrix(sapply(result, function(l) l$beta_se))
-  beta_se_adjusted <- matrix(sapply(result, function(l) l$beta_se_adjusted))
+  beta <- matrix(sapply(result_1, function(l) l$beta_hat))
+  beta_se <- matrix(sapply(result_1, function(l) l$beta_se))
+  beta_se_adjusted <- matrix(sapply(result_1, function(l) l$beta_se_adjusted))
   
   colnames(beta)= colnames(beta_se) = colnames(beta_se_adjusted)= beta_names
-  
-  #################################
   
   result <- compute_result_beta(beta_true_marginal, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level = 0.05)
   result_df <- data.frame(ss = rep(sample_size, num_estimator),
@@ -120,7 +133,35 @@ for (i_ss in 1:length(sample_sizes)) {
   names(result_df) <- c("ss", "est", "bias","se.unadj","se.adj", "sd", "rmse", "cp.unadj", "cp.adj")
   rownames(result_df) <- NULL
   
-  result_df_collected <- rbind(result_df_collected, result_df)
+  result_df_collected_1 <- rbind(result_df_collected_1, result_df)
+  
+  alpha <- matrix(sapply(result_2, function(l) l$alpha_hat), byrow = TRUE,nrow =nsim )
+  alpha_se <- matrix(sapply(result_2, function(l) l$alpha_se),byrow = TRUE,nrow =nsim)
+  alpha_se_adjusted <- matrix(sapply(result_2, function(l) l$alpha_se_adjusted),byrow = TRUE, nrow = nsim)
+  
+  colnames(alpha)= colnames(alpha_se)= colnames(alpha_se_adjusted) = alpha_names
+  
+  beta <- matrix(sapply(result_2, function(l) l$beta_hat))
+  beta_se <- matrix(sapply(result_2, function(l) l$beta_se))
+  beta_se_adjusted <- matrix(sapply(result_2, function(l) l$beta_se_adjusted))
+  
+  colnames(beta)= colnames(beta_se) = colnames(beta_se_adjusted)= beta_names
+  
+  result <- compute_result_beta(beta_true_marginal, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level = 0.05)
+  result_df <- data.frame(ss = rep(sample_size, num_estimator),
+                          est = ee_names,
+                          bias = result$bias,
+                          se=result$se,
+                          se_adjusted = result$se_adjusted,
+                          sd = result$sd,
+                          rmse = result$rmse,
+                          cp.unadj = result$coverage_prob,
+                          cp.adj = result$coverage_prob_adjusted)
+  names(result_df) <- c("ss", "est", "bias","se.unadj","se.adj", "sd", "rmse", "cp.unadj", "cp.adj")
+  rownames(result_df) <- NULL
+  
+  result_df_collected_2 <- rbind(result_df_collected_2, result_df)
 }
 
-save(result_df_collected,file = "test.RData")
+save(result_df_collected_1,file = "cwcls.RData")
+save(result_df_collected_2,file = "emee.RData")

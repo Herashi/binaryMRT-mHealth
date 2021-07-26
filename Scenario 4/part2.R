@@ -15,6 +15,8 @@ for (i in 1:length(MASTERLIST)){
 
 print(length(MASTERLIST))
 
+out$rmse <- with(out, bias^2)
+
 
 ## mean and SD estimate, number of replicates
 out <- cbind(aggregate(cbind(bias,se.unadj,se.adj, cp.unadj, cp.adj, rmse) ~
@@ -24,5 +26,6 @@ out <- cbind(aggregate(cbind(bias,se.unadj,se.adj, cp.unadj, cp.adj, rmse) ~
                             data = out, FUN=var)$bias)
 
 out$sd = sqrt(out$sd)
+out$rmse = sqrt(out$rmse)
 
 save(out,file = "test.RData")
