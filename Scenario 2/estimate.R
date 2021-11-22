@@ -9,7 +9,7 @@ data_generating_process <- dgm_binary_categorical_covariate
 library(tidyverse)
 
 library(foreach)
-library(doMC)
+# library(doMC)
 library(doRNG)
 
 compute_result_beta <- function(beta_true, beta, beta_se, beta_se_adjusted, moderator_vars, control_vars, significance_level,

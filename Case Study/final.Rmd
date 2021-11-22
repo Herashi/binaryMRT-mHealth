@@ -1,5 +1,5 @@
 ---
-title: "Case Study"
+title: "Case Study (Institution* Specialty)"
 output: html_document
 ---
 
@@ -16,6 +16,7 @@ study_data = impute_list[[1]]
 library(dplyr)
 library(geepack)
 library(tidyr)
+library(ggplot2)
 `%notin%` <- Negate(`%in%`)
 ```
 
@@ -194,29 +195,28 @@ save(indirectfulldata, file = "indirectfulldata.RData")
 
 ```{r}
 load("full_data_complete.RData")
-
-# cluster_size = full_data_complete %>%
-#   distinct(USERID,Specialty,INSTITUTION_STANDARD)%>%
-#   group_by(Specialty,INSTITUTION_STANDARD)%>%
-#   count()
-
-cluster_size = full_data_complete %>%
-  distinct(USERID,Specialty)%>%
-  group_by(Specialty)%>%
-  count() 
-
-cluster_size$group_id = 1:nrow(cluster_size)
+source("C-WCLS.R")
 
 dta = full_data_complete %>% 
-  filter(week_category != 'None')%>%
   mutate(mood_week = ifelse(week_category == "mood",1,0),
          sleep_week = ifelse(week_category == "sleep",1,0),
          activity_week = ifelse(week_category == "activity",1,0),
          study_week_2 = study_week^2)
 
+cluster_size = full_data_complete %>%
+  distinct(USERID,INSTITUTION_STANDARD)%>%
+  group_by(INSTITUTION_STANDARD)%>%
+  count()
 
-dta$week_category = factor(as.character(dta$week_category),
-                            levels = c("sleep","mood","activity"))
+# cluster_size = dta %>%
+#   distinct(USERID,Specialty,INSTITUTION_STANDARD)%>%
+#   group_by(Specialty,INSTITUTION_STANDARD)%>%
+#   count()
+
+cluster_size$group_id = 1:nrow(cluster_size)
+
+#dta$week_category = factor(as.character(dta$week_category),
+#                            levels = c("sleep","mood","activity"))
 dta$week_category_num = as.numeric(dta$week_category)
 
 
@@ -225,15 +225,15 @@ dta$NOTIFICATION_TYPE = factor(as.character(dta$NOTIFICATION_TYPE),
 #unique(dta$NOTIFICATION_TYPE)
 dta$NOTIFICATION_TYPE_num = as.numeric(dta$NOTIFICATION_TYPE)
 
-# User_specialty = dta %>% 
+# User_specialty = dta %>%
 #   select(USERID,Specialty,INSTITUTION_STANDARD)%>%
 #   distinct()%>%
 #   left_join(cluster_size[,c(1,2,4)], by = c("Specialty","INSTITUTION_STANDARD"))
 
-User_specialty = dta %>% 
-  select(USERID,Specialty)%>%
+User_specialty = dta %>%
+  select(USERID,INSTITUTION_STANDARD)%>%
   distinct()%>%
-  left_join(cluster_size[,c(1,3)], by = c("Specialty"))
+  left_join(cluster_size[,c(1,3)], by = c("INSTITUTION_STANDARD"))
 
 # construct the group structure
 group = list()
@@ -242,22 +242,208 @@ group[["group size"]] = unname(table(group[["group_id"]]))
 group[["#groups"]] = length(unique(group[["group_id"]]))
 group[["id"]] = unique(group[["group_id"]])
 
-dta$prob_A <- 0.5
+
+dta$prob_A <- 3/8
 ```
 
-### analysis 1: Only Mood Week
 
 ```{r}
-source("C-WCLS.R")
-dta_mood = dta %>% filter(week_category == "mood")
+my_plot_data = as.data.frame(matrix(NA,nrow = 10,ncol = 7))
+colnames(my_plot_data)= c("Index","Model-coef","est","SE","CI lower","CI upper","Method")
 
-control_vars <- c("DAILYprev","study_week")
+my_plot_data$Index = 1:nrow(my_plot_data)
+my_plot_data$`Model-coef`=rep(c("Marginal-intercept","ModeratePrev-intercept","ModeratePrev-prev","ModerateDay-intercept","ModerateDay-day"),2) 
+my_plot_data$Method =rep(c("C-WCLS","EMEE"),each = 5) 
+```
+
+
+### Split clusters to assess treatment effect heterogeneity
+
+```{r eval=FALSE, include=FALSE}
+control_vars <- c("DAILYprev","Day")
+moderator_vars <- NULL
+
+Speciality_EMEE = as.data.frame(matrix(NA,nrow = nrow(cluster_size),ncol = 8))
+Speciality_EMEE[,1] =  cluster_size$INSTITUTION_STANDARD
+Speciality_EMEE[,2] = cluster_size$Specialty
+Speciality_EMEE[,3] = as.numeric(cluster_size$n)
+
+colnames(Speciality_EMEE) = c("Institution","Specialty","cluster size","est","SE","CI lower","CI upper","p")
+
+Speciality_EMEE$`cluster size`= as.numeric(Speciality_EMEE$`cluster size`)
+
+for (i in 1:nrow(Speciality_EMEE)){
+  if (Speciality_EMEE[i,3] ==1 ) next
+  #print(i)
+  dta_s = dta %>% filter(Specialty == Speciality_EMEE[i,2]) %>% filter(INSTITUTION_STANDARD == Speciality_EMEE[i,1])
+  
+  fit_wcls_2 <- weighted_centered_least_square2(
+  dta = dta_s,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 3/8,
+  avail_varname = NULL,
+  estimator_initial_value = NULL)
+  
+  if (Speciality_EMEE[i,3] >3){
+    t_quantile <- qt(0.975, length(unique(dta_s$USERID)) - 1 - 2) 
+  }else{
+    t_quantile <- NA
+  }
+  
+  
+  result = c(fit_wcls_2$beta_hat,
+             fit_wcls_2$beta_se_adjusted , 
+             fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
+             fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted,
+             2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df = length(unique(dta_s$USERID))- 1 - 2, lower.tail = FALSE) )
+  
+  Speciality_EMEE[i,4:8] = result
+  
+}
+
+output = Speciality_EMEE %>% drop_na(est)
+
+knitr::kable(output)
+```
+
+```{r eval=FALSE, include=FALSE}
+control_vars <- c("DAILYprev","Day")
+moderator_vars <- NULL
+
+Speciality_EMEE = as.data.frame(matrix(NA,nrow = nrow(cluster_size),ncol = 7))
+Speciality_EMEE[,1] =  cluster_size$INSTITUTION_STANDARD
+Speciality_EMEE[,2] = as.numeric(cluster_size$n)
+
+colnames(Speciality_EMEE) = c("Institution","cluster size","est","SE","CI lower","CI upper","p")
+
+Speciality_EMEE$`cluster size`= as.numeric(Speciality_EMEE$`cluster size`)
+
+for (i in 1:nrow(Speciality_EMEE)){
+  if (Speciality_EMEE[i,2] <4 ) next
+  #print(i)
+  dta_s = dta %>%
+  filter(INSTITUTION_STANDARD == Speciality_EMEE[i,1])
+  
+  if (nrow(dta_s) ==0) next
+  
+  fit_wcls_2 <- weighted_centered_least_square2(
+  dta = dta_s,
+  id_varname = "USERID",
+  decision_time_varname = "Day",
+  treatment_varname = "NOTIFICATION",
+  outcome_varname = "Daily_complete",
+  control_varname = control_vars,
+  moderator_varname = moderator_vars,
+  rand_prob_varname = "prob_A",
+  rand_prob_tilde_varname = NULL,
+  rand_prob_tilde = 3/8,
+  avail_varname = NULL,
+  estimator_initial_value = NULL)
+  
+
+  t_quantile <- qt(0.975, length(unique(dta_s$USERID)) - 1 - 2) 
+
+  
+  est = exp(fit_wcls_2$beta_hat)
+  adj_se = fit_wcls_2$beta_se_adjusted * est
+  
+  result = c(est,
+             adj_se , 
+             est - t_quantile * adj_se,
+             est + t_quantile * adj_se,
+             2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df = length(unique(dta_s$USERID))- 1 - 2, lower.tail = FALSE) )
+  
+  Speciality_EMEE[i,3:7] = result
+  
+}
+
+output = Speciality_EMEE %>% drop_na()%>% filter(`cluster size`>6)%>% arrange(est)%>%mutate(Group = row_number())
+
+#knitr::kable(output)
+
+```
+
+
+```{r eval=FALSE, include=FALSE}
+# 
+### plot
+
+
+p = ggplot(data=output,
+    aes(x = Group,y = est, ymin = `CI lower`, ymax = `CI upper` ))+
+    geom_pointrange()+
+    geom_hline(yintercept =1, linetype=2)+
+    xlab('Institution')+ ylab("Relative Risk (95% Confidence Interval)")+
+    geom_errorbar(aes(ymin=`CI lower`, ymax=`CI upper`),width=0.2)+ #,cex=1
+    theme_bw()+
+    theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()) +
+    theme(axis.text=element_text(size=16),
+        axis.title=element_text(size=16))#,face="bold")
+p
+
+```
+
+
+```{r eval=FALSE, include=FALSE}
+output = Speciality_EMEE %>% drop_na()%>% arrange(est)%>%mutate(Group = row_number())
+output = output[c(1:10,89:98),]
+
+library(metafor)
+labs <- output$Group
+yi   <- output$est
+sei  <- output$SE
+
+# Combine data into summary estimate
+res  <- rma(yi=yi, sei=sei, method="FE")
+# summary(res)
+
+# Plot combined data
+forest(res, transf=exp, refline=1, xlab="relative risk (95%CI)", slab=labs, mlab="Summary Estimate")
+# mtext(paste("Association p-value=",summary(res)$pval),side=3, line=-1)
+# mtext(paste("Heterogeneity p-value=",summary(res)$QEp),side=3, line=-2.25)
+```
+
+```{r}
+barlines = "#1F3552"
+barfill = "#4271AE"
+
+ggplot(dta,aes(x =DAILYprev))+
+  geom_histogram(aes(y=..count..),binwidth = 0.05)+
+  scale_x_continuous(name = "Prior week's completion rate")+
+  scale_y_continuous(name = "Count")+
+  theme_bw()+
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()) +
+    theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14))#,face="bold")
+  
+
+```
+
+### analysis 1: Fully marginal
+
+```{r}
+control_vars <- c("DAILYprev","Day")
 moderator_vars <- NULL
 
 ## our method
  
 fit_wcls <- weighted_centered_least_square(
-  dta = dta_mood,
+  dta = dta,
   group=group,
   id_varname = "USERID",
   decision_time_varname = "Day",
@@ -267,7 +453,7 @@ fit_wcls <- weighted_centered_least_square(
   moderator_varname = moderator_vars,
   rand_prob_varname = "prob_A",
   rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
+  rand_prob_tilde = 3/8,
   avail_varname = NULL,
   estimator_initial_value = NULL
 )
@@ -276,8 +462,7 @@ fit_wcls <- weighted_centered_least_square(
 ## Qian's method
  
 fit_wcls_2 <- weighted_centered_least_square2(
-  dta = dta_mood,
-  group_ls=group_ls,
+  dta = dta,
   id_varname = "USERID",
   decision_time_varname = "Day",
   treatment_varname = "NOTIFICATION",
@@ -286,26 +471,29 @@ fit_wcls_2 <- weighted_centered_least_square2(
   moderator_varname = moderator_vars,
   rand_prob_varname = "prob_A",
   rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
+  rand_prob_tilde = 3/8,
   avail_varname = NULL,
   estimator_initial_value = NULL
 )
-
-t_quantile <- qt(0.975, length(unique(dta_mood$Specialty)) - 1 - 2) 
 ```
 
 ### Direct Effect Estimation summary
 
 #### Our method
 
-```{r}
-dta_mood %>% group_by(NOTIFICATION) %>% summarise(m = mean(Daily_complete))
+```{r warning=FALSE}
+dta %>% group_by(NOTIFICATION) %>% summarise(m = mean(Daily_complete))
 ```
 
 ##### point estimation
 
 ```{r}
 fit_wcls$beta_hat 
+```
+
+#####  SE
+```{r}
+fit_wcls$beta_se
 ```
 
 ##### adjusted SE
@@ -315,13 +503,22 @@ fit_wcls$beta_se_adjusted
 
 ##### 95% CI
 ```{r}
+t_quantile <- qt(0.975, length(unique(dta$Specialty)) - 1 - 2) 
 rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
       fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
 ```
 
 ##### p value
 ```{r}
-2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta_mood$Specialty)) - 1 - 2, lower.tail = FALSE) 
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta$Specialty)) - 1 - 2, lower.tail = FALSE) 
+```
+
+
+```{r include=FALSE}
+my_plot_data[1,3:6] = c(fit_wcls$beta_hat,
+             fit_wcls$beta_se_adjusted , 
+             fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
+             fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
 ```
 
 #### Qian's method
@@ -337,30 +534,34 @@ fit_wcls_2$beta_se_adjusted
 ```
 ##### 95% CI
 ```{r}
+t_quantile <- qt(0.975, length(unique(dta$USERID)) - 1 - 2) 
 rbind(fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
       fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted)
 ```
 
 ##### p value
 ```{r}
-2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df = length(unique(dta_mood$Specialty))- 1 - 2, lower.tail = FALSE) 
+2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df = length(unique(dta$Specialty))- 1 - 2, lower.tail = FALSE) 
 ```
 
 
+```{r include=FALSE}
+my_plot_data[6,3:6] = c(fit_wcls_2$beta_hat,
+             fit_wcls_2$beta_se_adjusted , 
+             fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
+             fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted)
+```
 
-### analysis 2: Only Activity Week
-
+### analysis 2: Add day-in-sutdy
 
 ```{r}
-dta_activity = dta %>% filter(week_category == "activity")
-
-control_vars <- c("study_week","DAILYprev")
-moderator_vars <- NULL
+control_vars <- c("DAILYprev","Day")
+moderator_vars <- c("Day")
 
 ## our method
  
 fit_wcls <- weighted_centered_least_square(
-  dta = dta_activity,
+  dta = dta,
   group=group,
   id_varname = "USERID",
   decision_time_varname = "Day",
@@ -370,7 +571,7 @@ fit_wcls <- weighted_centered_least_square(
   moderator_varname = moderator_vars,
   rand_prob_varname = "prob_A",
   rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
+  rand_prob_tilde = 3/8,
   avail_varname = NULL,
   estimator_initial_value = NULL
 )
@@ -379,8 +580,7 @@ fit_wcls <- weighted_centered_least_square(
 ## Qian's method
  
 fit_wcls_2 <- weighted_centered_least_square2(
-  dta = dta_activity,
-  group_ls=group_ls,
+  dta = dta,
   id_varname = "USERID",
   decision_time_varname = "Day",
   treatment_varname = "NOTIFICATION",
@@ -389,26 +589,25 @@ fit_wcls_2 <- weighted_centered_least_square2(
   moderator_varname = moderator_vars,
   rand_prob_varname = "prob_A",
   rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
+  rand_prob_tilde = 3/8,
   avail_varname = NULL,
   estimator_initial_value = NULL
 )
-
-t_quantile <- qt(0.975, length(unique(dta_activity$Specialty)) - 1 - 2) 
 ```
 
 ### Direct Effect Estimation summary
 
 #### Our method
 
-```{r}
-dta_activity %>% group_by(NOTIFICATION) %>% summarise(m = mean(Daily_complete))
-```
-
 ##### point estimation
 
 ```{r}
 fit_wcls$beta_hat 
+```
+
+#####  SE
+```{r}
+fit_wcls$beta_se
 ```
 
 ##### adjusted SE
@@ -418,15 +617,33 @@ fit_wcls$beta_se_adjusted
 
 ##### 95% CI
 ```{r}
+t_quantile <- qt(0.975, length(unique(dta$Specialty)) - 1 - 2) 
 rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
       fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
 ```
 
 ##### p value
-
 ```{r}
-2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta_activity$Specialty)) - 1 - 2, lower.tail = FALSE) 
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta$Specialty)) - 1 - 2, lower.tail = FALSE) 
 ```
+
+
+```{r include=FALSE}
+my_plot_data[4,3:6] = c(fit_wcls$beta_hat[1],
+             fit_wcls$beta_se_adjusted[1] , 
+             fit_wcls$beta_hat[1] - t_quantile * fit_wcls$beta_se_adjusted[1],
+             fit_wcls$beta_hat[1] + t_quantile * fit_wcls$beta_se_adjusted[1])
+
+my_plot_data[5,3:6] = c(fit_wcls$beta_hat[2],
+             fit_wcls$beta_se_adjusted[2] , 
+             fit_wcls$beta_hat[2] - t_quantile * fit_wcls$beta_se_adjusted[2],
+             fit_wcls$beta_hat[2] + t_quantile * fit_wcls$beta_se_adjusted[2])
+
+
+var_cor_2 = fit_wcls[["varcov_adjusted"]][4,5]
+```
+
+
 
 #### Qian's method
 
@@ -441,28 +658,41 @@ fit_wcls_2$beta_se_adjusted
 ```
 ##### 95% CI
 ```{r}
+t_quantile <- qt(0.975, length(unique(dta$USERID)) - 1 - 2)
 rbind(fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
       fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted)
 ```
 
 ##### p value
 ```{r}
-2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df =length(unique(dta_activity$Specialty)) - 1 - 2, lower.tail = FALSE) 
+2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df = length(unique(dta$Specialty))- 1 - 2, lower.tail = FALSE) 
 ```
 
-### analysis 3: Only Sleep Week
 
+```{r include=FALSE}
+my_plot_data[9,3:6] = c(fit_wcls_2$beta_hat[1],
+             fit_wcls_2$beta_se_adjusted[1] , 
+             fit_wcls_2$beta_hat[1] - t_quantile * fit_wcls_2$beta_se_adjusted[1],
+             fit_wcls_2$beta_hat[1] + t_quantile * fit_wcls_2$beta_se_adjusted[1])
+
+my_plot_data[10,3:6] = c(fit_wcls_2$beta_hat[2],
+             fit_wcls_2$beta_se_adjusted[2] , 
+             fit_wcls_2$beta_hat[2] - t_quantile * fit_wcls_2$beta_se_adjusted[2],
+             fit_wcls_2$beta_hat[2] + t_quantile * fit_wcls_2$beta_se_adjusted[2])
+
+var_cor_2_qian = fit_wcls_2[["varcov_adjusted"]][4,5]
+```
+
+### analysis 3: Add previous week's mood completion rate as a moderator
 
 ```{r}
-dta_sleep = dta %>% filter(week_category == "sleep")
-
-control_vars <- c("study_week","DAILYprev")
-moderator_vars <- NULL
+control_vars <- c("DAILYprev","Day")
+moderator_vars <- c("DAILYprev")
 
 ## our method
  
 fit_wcls <- weighted_centered_least_square(
-  dta = dta_sleep,
+  dta = dta,
   group=group,
   id_varname = "USERID",
   decision_time_varname = "Day",
@@ -472,7 +702,7 @@ fit_wcls <- weighted_centered_least_square(
   moderator_varname = moderator_vars,
   rand_prob_varname = "prob_A",
   rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
+  rand_prob_tilde = 3/8,
   avail_varname = NULL,
   estimator_initial_value = NULL
 )
@@ -481,8 +711,7 @@ fit_wcls <- weighted_centered_least_square(
 ## Qian's method
  
 fit_wcls_2 <- weighted_centered_least_square2(
-  dta = dta_sleep,
-  group_ls=group_ls,
+  dta = dta,
   id_varname = "USERID",
   decision_time_varname = "Day",
   treatment_varname = "NOTIFICATION",
@@ -491,26 +720,24 @@ fit_wcls_2 <- weighted_centered_least_square2(
   moderator_varname = moderator_vars,
   rand_prob_varname = "prob_A",
   rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
+  rand_prob_tilde = 3/8,
   avail_varname = NULL,
   estimator_initial_value = NULL
 )
 
-t_quantile <- qt(0.975, length(unique(dta_sleep$Specialty)) - 1 - 2) 
 ```
 
 ### Direct Effect Estimation summary
-
-#### Our method
-
-```{r}
-dta_sleep %>% group_by(NOTIFICATION) %>% summarise(m = mean(Daily_complete))
-```
 
 ##### point estimation
 
 ```{r}
 fit_wcls$beta_hat 
+```
+
+#####  SE
+```{r}
+fit_wcls$beta_se
 ```
 
 ##### adjusted SE
@@ -520,15 +747,32 @@ fit_wcls$beta_se_adjusted
 
 ##### 95% CI
 ```{r}
+t_quantile <- qt(0.975, length(unique(dta$Specialty)) - 1 - 2) 
 rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
       fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
 ```
 
 ##### p value
-
 ```{r}
-2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta_sleep$Specialty)) - 1 - 2, lower.tail = FALSE) 
+2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta$Specialty)) - 1 - 2, lower.tail = FALSE) 
 ```
+
+
+
+```{r include=FALSE}
+my_plot_data[2,3:6] = c(fit_wcls$beta_hat[1],
+             fit_wcls$beta_se_adjusted[1] , 
+             fit_wcls$beta_hat[1] - t_quantile * fit_wcls$beta_se_adjusted[1],
+             fit_wcls$beta_hat[1] + t_quantile * fit_wcls$beta_se_adjusted[1])
+
+my_plot_data[3,3:6] = c(fit_wcls$beta_hat[2],
+             fit_wcls$beta_se_adjusted[2] , 
+             fit_wcls$beta_hat[2] - t_quantile * fit_wcls$beta_se_adjusted[2],
+             fit_wcls$beta_hat[2] + t_quantile * fit_wcls$beta_se_adjusted[2])
+
+var_cor_3 = fit_wcls[["varcov_adjusted"]][4,5]
+```
+
 
 #### Qian's method
 
@@ -543,15 +787,171 @@ fit_wcls_2$beta_se_adjusted
 ```
 ##### 95% CI
 ```{r}
+t_quantile <- qt(0.975, length(unique(dta$USERID)) - 1 - 2)
 rbind(fit_wcls_2$beta_hat - t_quantile * fit_wcls_2$beta_se_adjusted,
       fit_wcls_2$beta_hat + t_quantile * fit_wcls_2$beta_se_adjusted)
 ```
 
 ##### p value
 ```{r}
-2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df =length(unique(dta_sleep$Specialty)) - 1 - 2, lower.tail = FALSE) 
+2 * pt(abs(fit_wcls_2$beta_hat)/fit_wcls_2$beta_se_adjusted,df = length(unique(dta$Specialty))- 1 - 2, lower.tail = FALSE) 
 ```
 
+
+```{r include=FALSE}
+my_plot_data[7,3:6] = c(fit_wcls_2$beta_hat[1],
+             fit_wcls_2$beta_se_adjusted[1] , 
+             fit_wcls_2$beta_hat[1] - t_quantile * fit_wcls_2$beta_se_adjusted[1],
+             fit_wcls_2$beta_hat[1] + t_quantile * fit_wcls_2$beta_se_adjusted[1])
+
+my_plot_data[8,3:6] = c(fit_wcls_2$beta_hat[2],
+             fit_wcls_2$beta_se_adjusted[2] , 
+             fit_wcls_2$beta_hat[2] - t_quantile * fit_wcls_2$beta_se_adjusted[2],
+             fit_wcls_2$beta_hat[2] + t_quantile * fit_wcls_2$beta_se_adjusted[2])
+
+var_cor_3_qian = fit_wcls_2[["varcov_adjusted"]][4,5]
+```
+
+
+```{r}
+### first plot: forest plot
+
+# labs <- plot_1$Method
+# yi   <- plot_1$est
+# sei  <- plot_1$SE
+# 
+# # Combine data into summary estimate
+# res  <- rma(yi=yi, sei=sei, method="FE")
+# # summary(res)
+# 
+# # Plot combined data
+# forest(res, transf=exp, refline=1, xlab="relative risk (95%CI)", slab=labs, mlab="Summary Estimate")
+#mtext(paste("Association p-value=",summary(res)$pval),side=3, line=-1)
+#mtext(paste("Heterogeneity p-value=",summary(res)$QEp),side=3, line=-2.25)
+```
+
+```{r eval=FALSE, include=FALSE}
+library(ggforestplot)
+plot_1 = my_plot_data[c(1,6),]
+forestplot(
+  df = plot_1,
+  name = Method,
+  estimate = est,
+  se = SE,
+  logodds = T,
+  xlab = "Relative Risk (95% CI)")
+```
+
+```{r}
+plot_2 = my_plot_data[c(2,3,7,8),]
+
+data = as.data.frame(matrix(NA, nrow = 200, ncol = 5))
+colnames(data) = c("x","y","lower","upper","Method")
+data$x = rep(seq(0,1,length.out = 100),2)
+data$Method = rep(c("C-WCLS","EMEE"),each = 100)
+
+data$y[1:100] = exp(plot_2[1,3]+plot_2[2,3]*data$x[1:100])
+data$y[101:200] = exp(plot_2[3,3]+plot_2[4,3]*data$x[101:200])
+
+
+########## part 1
+var_cor_cwcls = matrix(c((my_plot_data[2,"SE"])^2,var_cor_3,var_cor_3,(my_plot_data[3,"SE"])^2),nrow=2)
+
+calculate_se = function(x) sqrt(t(c(1,x))%*%var_cor_cwcls%*%c(1,x))
+
+se_cor = sapply(data$x[1:100],FUN=calculate_se)
+
+t_quantile <- qt(0.975, length(unique(dta$Specialty)) - 1 - 2)
+
+data$lower[1:100] = data$y[1:100] - t_quantile*data$y[1:100]*se_cor
+data$upper[1:100] = data$y[1:100] + t_quantile*data$y[1:100]*se_cor
+
+
+####### part2
+var_cor_emee = matrix(c((my_plot_data[7,"SE"])^2,var_cor_3_qian,var_cor_3_qian,(my_plot_data[8,"SE"])^2),nrow=2)
+
+calculate_se = function(x) sqrt(t(c(1,x))%*%var_cor_emee%*%c(1,x))
+
+se_cor = sapply(data$x[101:200],FUN=calculate_se)
+
+t_quantile <- qt(0.975, length(unique(dta$USERID)) - 1 - 2)
+data$lower[101:200] = data$y[101:200] - t_quantile*data$y[101:200]*se_cor
+data$upper[101:200] = data$y[101:200] + t_quantile*data$y[101:200]*se_cor
+
+
+p<-ggplot(data=data, aes(x=x, y=y, colour=Method)) + geom_line()
+p<-p+geom_ribbon(aes(ymin=lower, ymax=upper), linetype=2, alpha=0.1)+xlab("Prior Week Completion Rate")+ylab("Relative Risk")+
+  theme_bw()+
+    theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()) +
+    geom_hline(yintercept =1, linetype=2)+
+    theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14))#,face="bold")
+
+
+######################################################
+
+
+
+plot_3 = my_plot_data[c(4,5,9,10),]
+
+data = as.data.frame(matrix(NA, nrow = 364, ncol = 5))
+colnames(data) = c("x","y","lower","upper","Method")
+data$x = rep(1:182,2)
+data$Method = rep(c("C-WCLS","EMEE"),each = 182)
+
+data$y[1:182] = exp(plot_3[1,3]+plot_3[2,3]*data$x[1:182])
+data$y[183:364] = exp(plot_3[3,3]+plot_3[4,3]*data$x[183:364])
+
+
+########## part 1
+var_cor_cwcls = matrix(c((my_plot_data[4,"SE"])^2,var_cor_2,var_cor_2,(my_plot_data[5,"SE"])^2),nrow=2)
+
+calculate_se = function(x) sqrt(t(c(1,x))%*%var_cor_cwcls%*%c(1,x))
+
+se_cor = sapply(data$x[1:182],FUN=calculate_se)
+
+t_quantile <- qt(0.975, length(unique(dta$Specialty)) - 1 - 2)
+
+data$lower[1:182] = data$y[1:182] - t_quantile*data$y[1:182]*se_cor
+data$upper[1:182] = data$y[1:182] + t_quantile*data$y[1:182]*se_cor
+
+
+####### part2
+var_cor_emee = matrix(c((my_plot_data[9,"SE"])^2,var_cor_2_qian,var_cor_2_qian,(my_plot_data[10,"SE"])^2),nrow=2)
+
+calculate_se = function(x) sqrt(t(c(1,x))%*%var_cor_emee%*%c(1,x))
+
+se_cor = sapply(data$x[183:364],FUN=calculate_se)
+
+t_quantile <- qt(0.975, length(unique(dta$USERID)) - 1 - 2)
+data$lower[183:364] = data$y[183:364] - t_quantile*data$y[183:364]*se_cor
+data$upper[183:364] = data$y[183:364] + t_quantile*data$y[183:364]*se_cor
+
+
+p_day<-ggplot(data=data, aes(x=x, y=y, colour=Method)) + geom_line()
+p_day<-p_day+geom_ribbon(aes(ymin=lower, ymax=upper), linetype=2, alpha=0.1)+xlab("Day in Study")+ylab("Relative Risk")+
+  theme_bw()+
+    theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()) +
+    geom_hline(yintercept =1, linetype=2)+
+    theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14))#,face="bold")
+
+```
+
+
+
+
+```{r}
+ggpubr::ggarrange(p,p_day,common.legend = T)
+```
 
 ## Indirect Effect
 
@@ -565,21 +965,17 @@ cluster_size = indirectfulldata %>%
   count()%>%
   arrange(n)
 
-# badids = (head(cluster_size[,1],8))
-
 dta = indirectfulldata %>% 
-  filter(week_category != 'None')%>%
+  #filter(week_category != 'None')%>%
   mutate(mood_week = ifelse(week_category == "mood",1,0),
          sleep_week = ifelse(week_category == "sleep",1,0),
          activity_week = ifelse(week_category == "activity",1,0),
          study_week_2 = study_week^2)
 
-# %>% filter(Specialty %notin% badids)
-
 cluster_size$group_id = 1:nrow(cluster_size)
 
-dta$week_category = factor(as.character(dta$week_category),
-                           levels = c("sleep","mood","activity"))
+# dta$week_category = factor(as.character(dta$week_category),
+#                           levels = c("sleep","mood","activity"))
 dta$week_category_num = as.numeric(dta$week_category)
 
 
@@ -619,7 +1015,7 @@ group[["group size"]] = unname(table(group[["group_id"]]))
 group[["#groups"]] = length(unique(group[["group_id"]]))
 group[["id"]] = unique(group[["group_id"]])
 
-dta$prob_A <- 0.5
+dta$prob_A <- 3/8
 ```
 
 
@@ -627,8 +1023,8 @@ dta$prob_A <- 0.5
 ### analysis 1: marginal excursion effect
 
 ```{r}
-source("C-WCLS_ind.R")
-control_vars <- c("DAILYprev","study_week")
+
+control_vars <- c("DAILYprev","Day")
 moderator_vars <- NULL
 
 ## our method
@@ -644,12 +1040,12 @@ fit_wcls <- weighted_centered_least_square(
   moderator_varname = moderator_vars,
   rand_prob_varname = "prob_A",
   rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
+  rand_prob_tilde = 3/8,
   avail_varname = NULL,
   estimator_initial_value = NULL
 )
 
-t_quantile <- qt(0.975, length(unique(dta[, "pairid"])) - 1 - 2) 
+t_quantile <- qt(0.975, group[["#groups"]]- 1 - 2) 
 ```
 
 
@@ -663,57 +1059,9 @@ t_quantile <- qt(0.975, length(unique(dta[, "pairid"])) - 1 - 2)
 fit_wcls$beta_hat 
 ```
 
-##### adjusted SE
+#####  SE
 ```{r}
-fit_wcls$beta_se_adjusted 
-```
-
-##### 95% CI
-```{r}
-rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
-      fit_wcls$beta_hat + t_quantile * fit_wcls$beta_se_adjusted)
-```
-
-##### p value
-```{r}
-2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta$USERID)) - 1 - 2, lower.tail = FALSE) 
-```
-
-
-### analysis 2: 
-
-```{r}
-control_vars <- c("DAILYprev","study_week")
-moderator_vars <- c("mood_week","activity_week")
-
-## our method
-
-fit_wcls <- weighted_centered_least_square(
-  dta = dta,
-  group=group,
-  id_varname = "pairid",
-  decision_time_varname = "Day",
-  treatment_varname = "centeredaction",
-  outcome_varname = "Daily_complete",
-  control_varname = control_vars,
-  moderator_varname = moderator_vars,
-  rand_prob_varname = "prob_A",
-  rand_prob_tilde_varname = NULL,
-  rand_prob_tilde = 0.5,
-  avail_varname = NULL,
-  estimator_initial_value = NULL
-)
-
-t_quantile <- qt(0.975, length(unique(dta[, "pairid"])) - 1 - 2) 
-```
-
-
-#### Our method
-
-##### point estimation
-
-```{r}
-fit_wcls$beta_hat 
+fit_wcls$beta_se
 ```
 
 ##### adjusted SE
@@ -731,4 +1079,5 @@ rbind(fit_wcls$beta_hat - t_quantile * fit_wcls$beta_se_adjusted,
 ```{r}
 2 * pt(abs(fit_wcls$beta_hat)/fit_wcls$beta_se_adjusted,df =length(unique(dta$USERID)) - 1 - 2, lower.tail = FALSE) 
 ```
+
 

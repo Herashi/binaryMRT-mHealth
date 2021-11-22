@@ -175,7 +175,11 @@ weighted_centered_least_square <- function(
       row_ind = which(group[["group_id"]]==g)
       g_size = group[["group size"]][g]
       
-      ef_g <-apply(ef_n[row_ind,],2,sum)
+      if(g_size > 1){
+        ef_g <-apply(ef_n[row_ind,],2,sum)
+      }else{
+        ef_g = ef_n[row_ind,]
+      }
       ef = ef+ef_g/g_size
    }
   
@@ -256,29 +260,29 @@ weighted_centered_least_square <- function(
   }
   
   
-  Mn_sum <- apply(Mn_summand, c(2,3), sum)
-  Mn <- Mn_sum/sample_size 
-  Mn_inv <- solve(Mn)
 
-  # Mn_n <- array(NA, dim = c(sample_size, p+q, p+q))
-  # for (i in 1:sample_size) {
-  #   Mn_n[i, , ] <- apply(Mn_summand[person_first_index[i] : (person_first_index[i+1] - 1),,], c(2,3), sum)
-  # }
-  # 
-  # bread = array(NA, dim = c(group[["#groups"]], p+q, p+q))
-  # 
-  # for (g in group[["id"]]){
-  #  row_ind = which(group[["group_id"]]==g)
-  #  # g_size = group[["group size"]][g]
-  #  if(length(row_ind)>1){
-  #    bread[g,,] = apply(Mn_n[row_ind,,], c(2,3), mean)
-  #  }else{
-  #    bread[g,,] = Mn_n[row_ind,,]
-  #  }
-  # }
-  # 
-  # Mn <- apply(bread, c(2,3), sum)/group[["#groups"]]
-  # Mn_inv <- solve(Mn)
+  Mn_n <- array(NA, dim = c(sample_size, p+q, p+q))
+  for (i in 1:sample_size) {
+    Mn_n[i, , ] <- apply(Mn_summand[person_first_index[i] : (person_first_index[i+1] - 1),,], c(2,3), sum)
+  }
+   
+  bread = array(NA, dim = c(group[["#groups"]], p+q, p+q))
+  
+  for (g in group[["id"]]){
+   row_ind = which(group[["group_id"]]==g)
+   g_size = group[["group size"]][g]
+   if(g_size>1){
+     bread[g,,] = apply(Mn_n[row_ind,,], c(2,3), sum)/g_size
+   }else{
+     bread[g,,] = Mn_n[row_ind,,]
+   }
+  }
+  
+  midterm <- apply(bread, c(2,3), sum)
+  midterm_inv = solve(midterm)
+  
+  Mn = midterm/group[["#groups"]]
+  Mn_inv <- solve(Mn)
   
   ### 3.2 Compute \Sigma_n matrix (\Sigma_n is the empirical variance of the estimating function) ###
   
@@ -309,13 +313,13 @@ weighted_centered_least_square <- function(
         meat_g =meat_g + a %*% t(b)
       }
     }
-    meat = meat+meat_g/g_size
+    meat = meat+meat_g/(g_size^2)
   }
   
   Sigman <- meat/group[["#groups"]]
   ######################################
   
-  varcov <- Mn_inv %*% Sigman %*% t(Mn_inv)
+  varcov <- Mn_inv %*% Sigman %*% t(Mn_inv)/group[["#groups"]]
   alpha_se <- sqrt(diag(varcov)[1:q])
   beta_se <- sqrt(diag(varcov)[(q+1):(q+p)])
   
@@ -324,17 +328,13 @@ weighted_centered_least_square <- function(
   # MD-corrected (Mancl and DeRouen) sandwich estimator
   
   Sigman_tilde <- array(NA, dim = c(p+q,sample_size))
-  Mn_sum_inv <- solve(Mn_sum)
   
   for (i in 1:sample_size) {
-    g = group[["group_id"]][i]
-    n_group = group[["group size"]][g]
-    bread_g = Mn_sum_inv* n_group  # use this to approximate the group bread
     D_term_i <- D_term_collected[, person_first_index[i] : (person_first_index[i+1] - 1)]
     r_term_i <- matrix(r_term_collected[person_first_index[i] : (person_first_index[i+1] - 1)], ncol = 1)
     partialr_partialtheta_i <- partialr_partialtheta_collected[person_first_index[i] : (person_first_index[i+1] - 1), ]
     # H_ii <- partialr_partialtheta_i %*% Mn_inv %*% D_term_i 
-    H_ii <- partialr_partialtheta_i %*% bread_g %*% D_term_i 
+    H_ii <- partialr_partialtheta_i %*% midterm_inv %*% D_term_i 
     Ii_minus_Hii_inv <- solve(diag(nrow(H_ii)) - H_ii)
     
     Sigman_tilde[,i] <-  D_term_i %*% Ii_minus_Hii_inv %*% r_term_i 
@@ -356,12 +356,12 @@ weighted_centered_least_square <- function(
       }
     }
     
-    meat_tilde = meat_tilde + meat_g/g_size
+    meat_tilde = meat_tilde + meat_g/(g_size^2)
   }
   
   Sigman_tilde <- meat_tilde/group[["#groups"]]
   
-  varcov_adjusted <- Mn_inv %*% Sigman_tilde %*% t(Mn_inv)
+  varcov_adjusted <- Mn_inv %*% Sigman_tilde %*% t(Mn_inv)/group[["#groups"]]
   alpha_se_adjusted <- sqrt(diag(varcov_adjusted)[1:q])
   beta_se_adjusted <- sqrt(diag(varcov_adjusted)[(q+1):(q+p)])
   
@@ -383,7 +383,6 @@ weighted_centered_least_square <- function(
 
 weighted_centered_least_square2 <- function(
   dta,
-  group_ls,
   id_varname,
   decision_time_varname,
   treatment_varname,

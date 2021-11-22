@@ -1,4 +1,3 @@
-
 library(rootSolve) # for solver function multiroot()
 library(geepack) # for fitting GEE using package
 library(brm) # for Richardson et al. 2017 JASA method brm()
